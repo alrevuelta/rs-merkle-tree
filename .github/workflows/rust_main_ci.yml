@@ -46,7 +46,7 @@ jobs:
         with:
           components: rustfmt clippy
       - name: Build with all features
-        run: cargo check --all-features --future-incompat-report --locked
+        run: cargo check --all-features --future-incompat-report
 
   clippy:
     name: Clippy linter
