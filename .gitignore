@@ -1,2 +1,4 @@
 **/.DS_Store
 **/target
+# This is a library crate
+Cargo.lock
