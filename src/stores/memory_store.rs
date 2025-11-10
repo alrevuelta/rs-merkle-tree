@@ -3,11 +3,16 @@
 //! Simple in-memory store implementation.
 
 use crate::{MerkleError, Node, Store};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::RwLock};
 
 /// Simple in-memory store implementation using a `HashMap`.
 #[derive(Default)]
 pub struct MemoryStore {
+    inner: RwLock<MemoryStoreInner>,
+}
+
+#[derive(Default)]
+struct MemoryStoreInner {
     store: HashMap<(u32, u64), Node>,
     num_leaves: u64,
 }
@@ -26,27 +31,36 @@ impl Store for MemoryStore {
                 indices: indices.len(),
             });
         }
-
-        // The memory store doesnt really allow batch reads, so just get all the
-        // indexes/levels one by one.
+        let inner = self.inner.read().map_err(|e| {
+            MerkleError::LockPoisoned(format!("Failed to acquire read lock on MemoryStore: {}", e))
+        })?;
         let result = levels
             .iter()
             .zip(indices)
-            .map(|(&lvl, &idx)| self.store.get(&(lvl, idx)).cloned())
+            .map(|(&lvl, &idx)| inner.store.get(&(lvl, idx)).cloned())
             .collect();
-
         Ok(result)
     }
 
     fn put(&mut self, items: &[(u32, u64, Node)]) -> Result<(), MerkleError> {
+        let mut inner = self.inner.write().map_err(|e| {
+            MerkleError::LockPoisoned(format!(
+                "Failed to acquire write lock on MemoryStore: {}",
+                e
+            ))
+        })?;
         for (level, index, hash) in items {
-            self.store.insert((*level, *index), *hash);
+            inner.store.insert((*level, *index), *hash);
         }
         let counter = items.iter().filter(|(level, _, _)| *level == 0).count();
-        self.num_leaves += counter as u64;
+        inner.num_leaves += counter as u64;
         Ok(())
     }
     fn get_num_leaves(&self) -> u64 {
-        self.num_leaves
+        // For get_num_leaves, we use expect since it's a simple getter and lock poisoning
+        // would indicate a serious bug. Using expect provides a clearer panic message.
+        self.inner.read()
+            .expect("MemoryStore lock was poisoned - this indicates a panic occurred while holding the lock")
+            .num_leaves
     }
 }
