@@ -31,8 +31,8 @@ fn main() {
     .unwrap();
 
     println!("root: {:?}", tree.root().unwrap());
-    println!("num leaves: {:?}", tree.num_leaves());
-    println!("proof: {:?}", tree.proof(0).unwrap().proof);
+    println!("num leaves: {:?}", tree.num_leaves().unwrap());
+    println!("proof: {:?}", tree.proof(0).unwrap().read().unwrap().proof);
 }
 ```
 

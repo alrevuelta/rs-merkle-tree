@@ -5,12 +5,40 @@
 use crate::hasher::{Hasher, Keccak256Hasher};
 use crate::{MerkleError, Node, Store};
 use core::ops::Index;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::RwLock};
 
 #[cfg(feature = "memory_store")]
 use crate::stores::MemoryStore;
 
 pub struct MerkleProof<const DEPTH: usize> {
+    inner: RwLock<MerkleProofInner<DEPTH>>,
+}
+
+impl<const DEPTH: usize> MerkleProof<DEPTH> {
+    /// Get a read lock on the proof data
+    pub fn read(
+        &self,
+    ) -> Result<std::sync::RwLockReadGuard<'_, MerkleProofInner<DEPTH>>, MerkleError> {
+        self.inner.read().map_err(|e| {
+            MerkleError::LockPoisoned(format!("Failed to acquire read lock on MerkleProof: {}", e))
+        })
+    }
+
+    /// Get a write lock on the proof data
+    pub fn write(
+        &self,
+    ) -> Result<std::sync::RwLockWriteGuard<'_, MerkleProofInner<DEPTH>>, MerkleError> {
+        self.inner.write().map_err(|e| {
+            MerkleError::LockPoisoned(format!(
+                "Failed to acquire write lock on MerkleProof: {}",
+                e
+            ))
+        })
+    }
+}
+
+// Make MerkleProofInner public so the read/write methods can return it
+pub struct MerkleProofInner<const DEPTH: usize> {
     pub proof: [Node; DEPTH],
     pub leaf: Node,
     pub index: u64,
@@ -18,6 +46,14 @@ pub struct MerkleProof<const DEPTH: usize> {
 }
 
 pub struct MerkleTree<H, S, const DEPTH: usize>
+where
+    H: Hasher,
+    S: Store,
+{
+    inner: RwLock<MerkleTreeInner<H, S, DEPTH>>,
+}
+
+struct MerkleTreeInner<H, S, const DEPTH: usize>
 where
     H: Hasher,
     S: Store,
@@ -78,21 +114,27 @@ where
             last: hasher.hash(&zero[DEPTH - 1], &zero[DEPTH - 1]),
         };
         Self {
-            hasher,
-            store,
-            zeros,
+            inner: RwLock::new(MerkleTreeInner {
+                hasher,
+                store,
+                zeros,
+            }),
         }
     }
 
-    pub fn add_leaves(&mut self, leaves: &[Node]) -> Result<(), MerkleError> {
+    pub fn add_leaves(&self, leaves: &[Node]) -> Result<(), MerkleError> {
         // Early return
         if leaves.is_empty() {
             return Ok(());
         }
 
+        let mut inner = self.inner.write().map_err(|e| {
+            MerkleError::LockPoisoned(format!("Failed to acquire write lock on MerkleTree: {}", e))
+        })?;
+
         // Error if leaves do not fit in the tree
         // TODO: Avoid calculating this. Calculate it at init or do the shifting with the generic.
-        if self.store.get_num_leaves() + leaves.len() as u64 > (1 << DEPTH as u64) {
+        if inner.store.get_num_leaves() + leaves.len() as u64 > (1 << DEPTH as u64) {
             return Err(MerkleError::TreeFull {
                 depth: DEPTH as u32,
                 capacity: 1 << DEPTH as u64,
@@ -107,7 +149,7 @@ where
         let mut cache: HashMap<(u32, u64), Node> = HashMap::new();
 
         for (offset, leaf) in leaves.iter().enumerate() {
-            let mut idx = self.store.get_num_leaves() + offset as u64;
+            let mut idx = inner.store.get_num_leaves() + offset as u64;
             let mut h = *leaf;
 
             // Store the leaf
@@ -132,7 +174,7 @@ where
 
             // Batch-fetch the missing siblings and insert them in cache.
             if fetch_len != 0 {
-                let fetched = self.store.get(
+                let fetched = inner.store.get(
                     &levels_to_fetch[..fetch_len],
                     &indices_to_fetch[..fetch_len],
                 )?;
@@ -150,7 +192,7 @@ where
                 let sib_hash = cache
                     .get(&(level as u32, sibling_idx))
                     .copied()
-                    .unwrap_or(self.zeros[level]);
+                    .unwrap_or(inner.zeros[level]);
 
                 let (left, right) = if idx & 1 == 1 {
                     (sib_hash, h)
@@ -158,7 +200,7 @@ where
                     (h, sib_hash)
                 };
 
-                h = self.hasher.hash(&left, &right);
+                h = inner.hasher.hash(&left, &right);
                 idx >>= 1;
 
                 batch.push(((level + 1) as u32, idx, h));
@@ -167,19 +209,22 @@ where
         }
 
         // Update all values in a single batch
-        self.store.put(&batch)?;
+        inner.store.put(&batch)?;
 
         Ok(())
     }
 
     pub fn root(&self) -> Result<Node, MerkleError> {
-        Ok(self
+        let inner = self.inner.read().map_err(|e| {
+            MerkleError::LockPoisoned(format!("Failed to acquire read lock on MerkleTree: {}", e))
+        })?;
+        Ok(inner
             .store
             .get(&[DEPTH as u32], &[0])?
             .into_iter()
             .next()
             .ok_or_else(|| MerkleError::StoreError("root fetch returned empty vector".into()))?
-            .unwrap_or(self.zeros[DEPTH]))
+            .unwrap_or(inner.zeros[DEPTH]))
     }
 
     pub fn proof(&self, leaf_idx: u64) -> Result<MerkleProof<DEPTH>, MerkleError> {
@@ -200,6 +245,10 @@ where
                 num_leaves: 1 << DEPTH as u64,
             });
         }
+
+        let inner = self.inner.read().map_err(|e| {
+            MerkleError::LockPoisoned(format!("Failed to acquire read lock on MerkleTree: {}", e))
+        })?;
 
         // Build level/index lists for siblings plus the leaf.
         // TODO: Can't do arithmetic here with DEPTH meaning there is no
@@ -222,40 +271,66 @@ where
         indices.push(leaf_idx);
 
         // Batch fetch all requested nodes.
-        let fetched = self.store.get(&levels, &indices)?;
+        let fetched = inner.store.get(&levels, &indices)?;
 
         // The first DEPTH items are the siblings.
         let mut proof = [Node::ZERO; DEPTH];
         for (d, opt) in fetched.iter().take(DEPTH).enumerate() {
-            proof[d] = opt.unwrap_or(self.zeros[d]);
+            proof[d] = opt.unwrap_or(inner.zeros[d]);
         }
 
         // The last item is the leaf itself.
-        let leaf_hash = fetched.last().copied().flatten().unwrap_or(self.zeros[0]);
+        let leaf_hash = fetched.last().copied().flatten().unwrap_or(inner.zeros[0]);
+
+        // Release the lock before calling root() to avoid deadlock
+        let root = {
+            drop(inner);
+            self.root()?
+        };
 
         Ok(MerkleProof {
-            proof,
-            leaf: leaf_hash,
-            index: leaf_idx,
-            root: self.root()?,
+            inner: RwLock::new(MerkleProofInner {
+                proof,
+                leaf: leaf_hash,
+                index: leaf_idx,
+                root,
+            }),
         })
     }
 
     pub fn verify_proof(&self, proof: &MerkleProof<DEPTH>) -> Result<bool, MerkleError> {
-        let mut computed_hash = proof.leaf;
-        for (j, sibling_hash) in proof.proof.iter().enumerate() {
-            let (left, right) = if proof.index & (1 << j) == 0 {
+        let proof_inner = proof.inner.read().map_err(|e| {
+            MerkleError::LockPoisoned(format!("Failed to acquire read lock on MerkleProof: {}", e))
+        })?;
+        let tree_inner = self.inner.read().map_err(|e| {
+            MerkleError::LockPoisoned(format!("Failed to acquire read lock on MerkleTree: {}", e))
+        })?;
+        let mut computed_hash = proof_inner.leaf;
+        let idx = proof_inner.index;
+        let root = proof_inner.root;
+        for (j, sibling_hash) in proof_inner.proof.iter().enumerate() {
+            let (left, right) = if idx & (1 << j) == 0 {
                 (computed_hash, *sibling_hash)
             } else {
                 (*sibling_hash, computed_hash)
             };
-            computed_hash = self.hasher.hash(&left, &right);
+            computed_hash = tree_inner.hasher.hash(&left, &right);
         }
-        Ok(computed_hash == proof.root)
+        Ok(computed_hash == root)
     }
 
-    pub fn num_leaves(&self) -> u64 {
-        self.store.get_num_leaves()
+    pub fn num_leaves(&self) -> Result<u64, MerkleError> {
+        Ok(self
+            .inner
+            .read()
+            .map_err(|e| {
+                MerkleError::LockPoisoned(format!(
+                    "Failed to acquire read lock on MerkleTree: {}",
+                    e
+                ))
+            })?
+            .store
+            .get_num_leaves())
     }
 }
 
@@ -312,10 +387,14 @@ mod tests {
             to_node!("0x27ae5ba08d7291c96c8cbddcc148bf48a6d68c7974b94356f53754ef6171d757"),
         ];
 
-        for (i, zero) in tree.zeros.front.iter().enumerate() {
+        let inner = tree
+            .inner
+            .read()
+            .expect("Lock should not be poisoned in test");
+        for (i, zero) in inner.zeros.front.iter().enumerate() {
             assert_eq!(zero, &expected_zeros[i]);
         }
-        assert_eq!(tree.zeros.last, expected_zeros[32]);
+        assert_eq!(inner.zeros.last, expected_zeros[32]);
     }
 
     #[cfg(feature = "memory_store")]
@@ -366,10 +445,14 @@ mod tests {
             to_node!("0x2f68a1c58e257e42a17a6c61dff5551ed560b9922ab119d5ac8e184c9734ead9"),
         ];
 
-        for (i, zero) in tree.zeros.front.iter().enumerate() {
+        let inner = tree
+            .inner
+            .read()
+            .expect("Lock should not be poisoned in test");
+        for (i, zero) in inner.zeros.front.iter().enumerate() {
             assert_eq!(zero, &expected_zeros[i]);
         }
-        assert_eq!(tree.zeros.last, expected_zeros[32]);
+        assert_eq!(inner.zeros.last, expected_zeros[32]);
     }
 
     #[cfg(feature = "memory_store")]
@@ -377,7 +460,7 @@ mod tests {
     fn test_tree_full_error() {
         let hasher = Keccak256Hasher;
         let store = MemoryStore::default();
-        let mut tree = MerkleTree::<Keccak256Hasher, MemoryStore, 3>::new(hasher, store);
+        let tree = MerkleTree::<Keccak256Hasher, MemoryStore, 3>::new(hasher, store);
 
         tree.add_leaves(&(0..8).map(|_| Node::ZERO).collect::<Vec<Node>>())
             .unwrap();

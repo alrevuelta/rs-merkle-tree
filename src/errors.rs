@@ -11,4 +11,7 @@ pub enum MerkleError {
 
     #[error("Levels and indices must have the same length")]
     LengthMismatch { levels: usize, indices: usize },
+
+    #[error("Lock was poisoned: {0}")]
+    LockPoisoned(String),
 }

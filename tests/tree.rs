@@ -32,7 +32,7 @@ fn dir_size(path: &Path) -> u64 {
 #[cfg(feature = "memory_store")]
 #[test]
 fn test_merkle_tree_keccak_32_memory() {
-    let mut tree: MerkleTree32 = MerkleTree::new(Keccak256Hasher, MemoryStore::default());
+    let tree: MerkleTree32 = MerkleTree::new(Keccak256Hasher, MemoryStore::default());
 
     // create 10k leaves.
     let leaves = (0..10_000)
@@ -44,21 +44,21 @@ fn test_merkle_tree_keccak_32_memory() {
         tree.add_leaves(&[*i]).unwrap();
     }
 
-    assert_eq!(tree.num_leaves(), 10_000);
+    assert_eq!(tree.num_leaves().unwrap(), 10_000);
     assert_eq!(
         tree.root().unwrap(),
         to_node!("0x532c79f3ea0f4873946d1b14770eaa1c157255a003e73da987b858cc287b0482")
     );
 
     // reset the tree.
-    let mut tree: MerkleTree32 = MerkleTree::new(Keccak256Hasher, MemoryStore::default());
+    let tree: MerkleTree32 = MerkleTree::new(Keccak256Hasher, MemoryStore::default());
 
     // same but add them in batches of 1_000.
     for batch in leaves.chunks(1_000) {
         tree.add_leaves(&batch).unwrap();
     }
 
-    assert_eq!(tree.num_leaves(), 10_000);
+    assert_eq!(tree.num_leaves().unwrap(), 10_000);
     assert_eq!(
         tree.root().unwrap(),
         to_node!("0x532c79f3ea0f4873946d1b14770eaa1c157255a003e73da987b858cc287b0482")
@@ -67,7 +67,7 @@ fn test_merkle_tree_keccak_32_memory() {
     // Get proofs for each leaf and verify them.
     for i in 0..10_000 {
         let proof = tree.proof(i).unwrap();
-        assert_eq!(proof.proof.len(), 32);
+        assert_eq!(proof.read().unwrap().proof.len(), 32);
         assert_eq!(tree.verify_proof(&proof).unwrap(), true);
     }
 
@@ -104,7 +104,7 @@ fn test_disk_space() {
         S: Store,
         F: FnOnce() -> S,
     {
-        let mut tree: MerkleTree<Keccak256Hasher, S, 32> =
+        let tree: MerkleTree<Keccak256Hasher, S, 32> =
             MerkleTree::new(Keccak256Hasher, new_store());
 
         for _ in 0..NUM_BATCHES {
