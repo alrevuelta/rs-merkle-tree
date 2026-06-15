@@ -109,7 +109,7 @@ The following hash functions are supported:
 
 ## Benchmarks
 
-The following benchmarks measure in a AMD Ryzen 7 7700 8-Core Processor with 64GB of RAM the following:
+The following benchmarks measure in a MacBook Pro M4 24GB the following:
 * Consumed disk size
 * Leaf insertion throughput in thousands per second.
 * Merkle proof generation times.
@@ -136,19 +136,19 @@ python benchmarks.py
 
 | Depth | Hash | Store | Throughput (Kelem/s) |
 |---|---|---|---|
-| 32 | keccak256 | rocksdb | 18.280 |
-| 32 | keccak256 | sqlite | 22.348 |
-| 32 | keccak256 | sled | 43.280 |
-| 32 | keccak256 | memory | 86.084 |
+| 32 | keccak256 | rocksdb | 19.562 |
+| 32 | keccak256 | sqlite | 30.350 |
+| 32 | keccak256 | sled | 64.631 |
+| 32 | keccak256 | memory | 131.510 |
 
 ### `proof` time
 
 | Depth | Hash | Store | Time |
 |---|---|---|---|
-| 32 | keccak256 | memory | 560.990 ns |
-| 32 | keccak256 | sled | 7.878 µs |
-| 32 | keccak256 | sqlite | 14.562 µs |
-| 32 | keccak256 | rocksdb | 34.391 µs |
+| 32 | keccak256 | memory | 490.050 ns |
+| 32 | keccak256 | sled | 6.422 µs |
+| 32 | keccak256 | sqlite | 11.304 µs |
+| 32 | keccak256 | rocksdb | 42.014 µs |
 
 ## License
 
