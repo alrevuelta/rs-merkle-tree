@@ -136,19 +136,19 @@ python benchmarks.py
 
 | Depth | Hash | Store | Throughput (Kelem/s) |
 |---|---|---|---|
-| 32 | keccak256 | rocksdb | 19.562 |
-| 32 | keccak256 | sqlite | 30.350 |
-| 32 | keccak256 | sled | 64.631 |
-| 32 | keccak256 | memory | 131.510 |
+| 32 | keccak256 | rocksdb | 21.945 |
+| 32 | keccak256 | sqlite | 30.170 |
+| 32 | keccak256 | sled | 64.759 |
+| 32 | keccak256 | memory | 143.700 |
 
 ### `proof` time
 
 | Depth | Hash | Store | Time |
 |---|---|---|---|
-| 32 | keccak256 | memory | 490.050 ns |
-| 32 | keccak256 | sled | 6.422 µs |
-| 32 | keccak256 | sqlite | 11.304 µs |
-| 32 | keccak256 | rocksdb | 42.014 µs |
+| 32 | keccak256 | memory | 188.250 ns |
+| 32 | keccak256 | sled | 6.436 µs |
+| 32 | keccak256 | sqlite | 11.366 µs |
+| 32 | keccak256 | rocksdb | 30.235 µs |
 
 ## License
 
