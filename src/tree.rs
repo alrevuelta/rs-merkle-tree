@@ -84,6 +84,20 @@ where
         }
     }
 
+    /// Initialize Merkle tree with caller-provided precomputed zero hashes
+    /// precomputed[i] must be the zero hash at level i (0 = leaf, DEPTH-1 = top)
+    pub fn with_precomputed_zeros(hasher: H, store: S, precomputed: [Node; DEPTH]) -> Self {
+        let zeros = Zeros {
+            front: precomputed,
+            last: hasher.hash(&precomputed[DEPTH - 1], &precomputed[DEPTH - 1]),
+        };
+        Self {
+            hasher,
+            store,
+            zeros,
+        }
+    }
+
     pub fn add_leaves(&mut self, leaves: &[Node]) -> Result<(), MerkleError> {
         // Early return
         if leaves.is_empty() {
