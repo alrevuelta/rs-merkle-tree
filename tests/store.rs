@@ -1,10 +1,12 @@
 // Copyright 2025 Bilinear Labs - MIT License
 
 use rs_merkle_tree::{node::Node, to_node, Store};
-#[cfg(feature = "rocksdb_store")]
+#[cfg(any(feature = "rocksdb_store", feature = "file_store"))]
 use std::fs;
 use temp_file::TempFile;
 
+#[cfg(feature = "file_store")]
+use rs_merkle_tree::stores::FileStore;
 #[cfg(feature = "memory_store")]
 use rs_merkle_tree::stores::MemoryStore;
 #[cfg(feature = "rocksdb_store")]
@@ -13,6 +15,22 @@ use rs_merkle_tree::stores::RocksDbStore;
 use rs_merkle_tree::stores::SledStore;
 #[cfg(feature = "sqlite_store")]
 use rs_merkle_tree::stores::SqliteStore;
+
+// Builds a unique temporary directory path for the file store and removes the
+// placeholder file so `FileStore::new` can create a directory there.
+#[cfg(feature = "file_store")]
+fn temp_file_store_path() -> String {
+    let temp = TempFile::with_suffix("_filestore").unwrap();
+    let path = temp
+        .path()
+        .as_os_str()
+        .to_str()
+        .expect("Failed to build path for FileStore")
+        .to_owned();
+    temp.cleanup()
+        .expect("Failed to cleanup FileStore placeholder");
+    path
+}
 
 #[test]
 fn test_stores_single() {
@@ -36,11 +54,16 @@ fn test_stores_single() {
         .expect("Failed to cleanup RocksDB");
     println!("RocksDB path: {}", path_rocksdb);
 
+    #[cfg(feature = "file_store")]
+    let path_file = temp_file_store_path();
+
     // Test all implemented stores
     let mut stores: Vec<Box<dyn Store>> = Vec::new();
 
     #[cfg(feature = "memory_store")]
     stores.push(Box::new(MemoryStore::default()));
+    #[cfg(feature = "file_store")]
+    stores.push(Box::new(FileStore::new(&path_file)));
     #[cfg(feature = "sled_store")]
     stores.push(Box::new(SledStore::new("/tmp/sled1.db", true)));
     #[cfg(feature = "sqlite_store")]
@@ -84,6 +107,10 @@ fn test_stores_single() {
     // Now delete the RocksDB directory.
     #[cfg(feature = "rocksdb_store")]
     fs::remove_dir_all(path_rocksdb).expect("Failed to delete RocksDB file");
+
+    // Delete the FileStore directory.
+    #[cfg(feature = "file_store")]
+    fs::remove_dir_all(path_file).expect("Failed to delete FileStore directory");
 }
 
 #[test]
@@ -108,11 +135,16 @@ fn test_stores_multiple() {
         .expect("Failed to cleanup RocksDB");
     println!("RocksDB path: {}", path_rocksdb);
 
+    #[cfg(feature = "file_store")]
+    let path_file = temp_file_store_path();
+
     // Test all implemented stores
     let mut stores: Vec<Box<dyn Store>> = Vec::new();
 
     #[cfg(feature = "memory_store")]
     stores.push(Box::new(MemoryStore::default()));
+    #[cfg(feature = "file_store")]
+    stores.push(Box::new(FileStore::new(&path_file)));
     #[cfg(feature = "sled_store")]
     stores.push(Box::new(SledStore::new("/tmp/sled2.db", true)));
     #[cfg(feature = "sqlite_store")]
@@ -257,4 +289,8 @@ fn test_stores_multiple() {
     // Now delete the RocksDB directory.
     #[cfg(feature = "rocksdb_store")]
     fs::remove_dir_all(path_rocksdb).expect("Failed to delete RocksDB file");
+
+    // Delete the FileStore directory.
+    #[cfg(feature = "file_store")]
+    fs::remove_dir_all(path_file).expect("Failed to delete FileStore directory");
 }

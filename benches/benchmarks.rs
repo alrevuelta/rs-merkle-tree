@@ -1,7 +1,7 @@
 use criterion::black_box;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::random;
-use rs_merkle_tree::stores::{MemoryStore, RocksDbStore, SledStore, SqliteStore};
+use rs_merkle_tree::stores::{FileStore, MemoryStore, RocksDbStore, SledStore, SqliteStore};
 use rs_merkle_tree::{hasher::Keccak256Hasher, node::Node, tree::MerkleTree};
 
 // Constants for the benchmarks
@@ -22,6 +22,7 @@ fn bench_insertions(c: &mut Criterion) {
     let _ = std::fs::remove_file("sqlite.db");
     let _ = std::fs::remove_dir_all("sled.db");
     let _ = std::fs::remove_file("rocksdb.db");
+    let _ = std::fs::remove_dir_all("file.db");
 
     let mut memory_tree: MerkleTree<Keccak256Hasher, MemoryStore, 32> =
         MerkleTree::new(Keccak256Hasher, MemoryStore::default());
@@ -31,6 +32,8 @@ fn bench_insertions(c: &mut Criterion) {
         MerkleTree::new(Keccak256Hasher, SledStore::new("sled.db", false));
     let mut rocksdb_tree: MerkleTree<Keccak256Hasher, RocksDbStore, 32> =
         MerkleTree::new(Keccak256Hasher, RocksDbStore::new("rocksdb.db"));
+    let mut file_tree: MerkleTree<Keccak256Hasher, FileStore, 32> =
+        MerkleTree::new(Keccak256Hasher, FileStore::new("file.db"));
 
     // Depth 32 benchmarks Keccak256
     group.throughput(Throughput::Elements((NUM_BATCHES * BATCH_SIZE) as u64));
@@ -80,6 +83,17 @@ fn bench_insertions(c: &mut Criterion) {
             });
         },
     );
+    group.throughput(Throughput::Elements((NUM_BATCHES * BATCH_SIZE) as u64));
+    group.bench_function(BenchmarkId::new("file_store", "depth32_keccak256"), |b| {
+        b.iter(|| {
+            for _ in 0..NUM_BATCHES {
+                let leaves: Vec<Node> = (0..BATCH_SIZE)
+                    .map(|_| black_box(Node::random()))
+                    .collect::<Vec<Node>>();
+                file_tree.add_leaves(&leaves).unwrap();
+            }
+        });
+    });
 
     // Depth 32 benchmarks Poseidon
     // TODO: Benchmarks not working due to inputs being bigger than the prime
@@ -125,6 +139,7 @@ fn bench_insertions(c: &mut Criterion) {
     let _ = std::fs::remove_file("sqlite.db");
     let _ = std::fs::remove_dir_all("sled.db");
     let _ = std::fs::remove_file("rocksdb.db");
+    let _ = std::fs::remove_dir_all("file.db");
 
     group.finish();
 }
@@ -140,6 +155,7 @@ fn bench_get_proof(c: &mut Criterion) {
     let _ = std::fs::remove_file("sqlite.db");
     let _ = std::fs::remove_dir_all("sled.db");
     let _ = std::fs::remove_file("rocksdb.db");
+    let _ = std::fs::remove_dir_all("file.db");
 
     let mut memory_tree: MerkleTree<Keccak256Hasher, MemoryStore, 32> =
         MerkleTree::new(Keccak256Hasher, MemoryStore::default());
@@ -149,6 +165,8 @@ fn bench_get_proof(c: &mut Criterion) {
         MerkleTree::new(Keccak256Hasher, SledStore::new("sled.db", false));
     let mut rocksdb_tree: MerkleTree<Keccak256Hasher, RocksDbStore, 32> =
         MerkleTree::new(Keccak256Hasher, RocksDbStore::new("rocksdb.db"));
+    let mut file_tree: MerkleTree<Keccak256Hasher, FileStore, 32> =
+        MerkleTree::new(Keccak256Hasher, FileStore::new("file.db"));
 
     for _ in 0..NUM_BATCHES {
         let leaves: Vec<Node> = (0..BATCH_SIZE)
@@ -158,6 +176,7 @@ fn bench_get_proof(c: &mut Criterion) {
         sqlite_tree.add_leaves(&leaves).unwrap();
         sled_tree.add_leaves(&leaves).unwrap();
         rocksdb_tree.add_leaves(&leaves).unwrap();
+        file_tree.add_leaves(&leaves).unwrap();
     }
 
     group.bench_function(BenchmarkId::new("memory_store", "depth32_keccak256"), |b| {
@@ -188,11 +207,18 @@ fn bench_get_proof(c: &mut Criterion) {
             });
         },
     );
+    group.bench_function(BenchmarkId::new("file_store", "depth32_keccak256"), |b| {
+        b.iter(|| {
+            let i = random::<u64>() % (BATCH_SIZE * NUM_BATCHES);
+            file_tree.proof(i).unwrap();
+        });
+    });
 
     // Cleanup
     let _ = std::fs::remove_file("sqlite.db");
     let _ = std::fs::remove_dir_all("sled.db");
     let _ = std::fs::remove_file("rocksdb.db");
+    let _ = std::fs::remove_dir_all("file.db");
 
     group.finish();
 }

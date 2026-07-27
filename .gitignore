@@ -1,4 +1,4 @@
 **/.DS_Store
 **/target
-# This is a library crate
+**/.vscode
 Cargo.lock

@@ -19,11 +19,12 @@ path = "src/lib.rs"
 [features]
 all = ["all_stores"]
 default = ["memory_store"]
-all_stores = ["memory_store", "sled_store", "sqlite_store", "rocksdb_store"]
+all_stores = ["memory_store", "sled_store", "sqlite_store", "rocksdb_store", "file_store"]
 memory_store = []
 sled_store = ["dep:sled"]
 sqlite_store = ["rusqlite/bundled"]
 rocksdb_store = ["dep:rocksdb"]
+file_store = []
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }

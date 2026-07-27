@@ -94,12 +94,31 @@ fn main() {
 }
 ```
 
+**Depth: 32 | Hashing: Keccak | Store: file**
+
+```toml
+rs-merkle-tree = { version = "0.1.0", features = ["file_store"] }
+```
+
+```rust
+use rs_merkle_tree::hasher::Keccak256Hasher;
+use rs_merkle_tree::stores::FileStore;
+use rs_merkle_tree::tree::MerkleTree;
+
+fn main() {
+    // Stores one flat file per level inside the given directory.
+    let mut tree: MerkleTree<Keccak256Hasher, FileStore, 32> =
+        MerkleTree::new(Keccak256Hasher, FileStore::new("filestore.db"));
+}
+```
+
 ## Stores
 
 The following stores are supported:
 * [rusqlite](https://github.com/rusqlite/rusqlite)
 * [rocksdb](https://github.com/rust-rocksdb/rust-rocksdb)
 * [sled](https://github.com/spacejam/sled)
+* `file`: a flat store (no database engine) that keeps one file per level in a directory.
 
 ## Hash functions
 
@@ -131,24 +150,27 @@ python benchmarks.py
 | sled | 32 | 1000000 | 290.00 |
 | sqlite | 32 | 1000000 | 159.18 |
 | rocksdb | 32 | 1000000 | 183.27 |
+| file | 32 | 1000000 | 61.04 |
 
 ### `add_leaves` throughput
 
 | Depth | Hash | Store | Throughput (Kelem/s) |
 |---|---|---|---|
-| 32 | keccak256 | rocksdb | 21.945 |
-| 32 | keccak256 | sqlite | 30.170 |
-| 32 | keccak256 | sled | 64.759 |
-| 32 | keccak256 | memory | 143.700 |
+| 32 | keccak256 | rocksdb | 18.047 |
+| 32 | keccak256 | sqlite | 31.300 |
+| 32 | keccak256 | sled | 62.861 |
+| 32 | keccak256 | file | 135.790 |
+| 32 | keccak256 | memory | 142.940 |
 
 ### `proof` time
 
 | Depth | Hash | Store | Time |
 |---|---|---|---|
-| 32 | keccak256 | memory | 188.250 ns |
-| 32 | keccak256 | sled | 6.436 µs |
-| 32 | keccak256 | sqlite | 11.366 µs |
-| 32 | keccak256 | rocksdb | 30.235 µs |
+| 32 | keccak256 | memory | 188.280 ns |
+| 32 | keccak256 | file | 5.150 µs |
+| 32 | keccak256 | sled | 6.439 µs |
+| 32 | keccak256 | sqlite | 11.341 µs |
+| 32 | keccak256 | rocksdb | 41.998 µs |
 
 ## License
 

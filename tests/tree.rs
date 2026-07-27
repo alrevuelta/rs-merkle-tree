@@ -5,6 +5,8 @@ use rs_merkle_tree::{to_node, MerkleTree, Node, Store};
 use std::fs;
 use std::path::Path;
 
+#[cfg(feature = "file_store")]
+use rs_merkle_tree::stores::FileStore;
 #[cfg(feature = "memory_store")]
 use rs_merkle_tree::stores::MemoryStore;
 #[cfg(feature = "rocksdb_store")]
@@ -77,7 +79,8 @@ fn test_merkle_tree_keccak_32_memory() {
 #[cfg(any(
     feature = "sled_store",
     feature = "sqlite_store",
-    feature = "rocksdb_store"
+    feature = "rocksdb_store",
+    feature = "file_store"
 ))]
 #[test]
 #[ignore = "run it on demand, slow and takes some disk space"]
@@ -91,7 +94,7 @@ fn test_disk_space() {
     const BATCH_SIZE: usize = 1_000;
 
     // Clean up any previous runs.
-    ["sled.db", "sqlite.db", "rocksdb.db"]
+    ["sled.db", "sqlite.db", "rocksdb.db", "file.db"]
         .into_iter()
         .for_each(|p| {
             fs::remove_dir_all(p).ok();
@@ -121,6 +124,8 @@ fn test_disk_space() {
     bench_store::<SqliteStore, _>("sqlite.db", || SqliteStore::new("sqlite.db"));
     #[cfg(feature = "rocksdb_store")]
     bench_store::<RocksDbStore, _>("rocksdb.db", || RocksDbStore::new("rocksdb.db"));
+    #[cfg(feature = "file_store")]
+    bench_store::<FileStore, _>("file.db", || FileStore::new("file.db"));
 }
 
 fn print_size(name: &str, file: &str, num_leaves: u64) {
