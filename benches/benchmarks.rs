@@ -9,6 +9,39 @@ const BATCH_SIZE: u64 = 1000;
 const NUM_BATCHES: u64 = 10;
 const SAMPLE_SIZE: u64 = 10;
 
+/// Everything the benchmarked stores write, including the sibling files SQLite
+/// keeps next to the database. A stale WAL would be replayed into the new
+/// database, so it has to go too.
+const STORE_PATHS: [&str; 6] = [
+    "sqlite.db",
+    "sqlite.db-wal",
+    "sqlite.db-shm",
+    "sled.db",
+    "rocksdb.db",
+    "file.db",
+];
+
+/// Deletes every store, whether it is a file or a directory.
+///
+/// Leftover state is not a cosmetic problem: the stores persist their leaf
+/// count, so a surviving database makes the next run resume from it and measure
+/// insertions into an already large tree.
+fn cleanup_stores() {
+    for path in STORE_PATHS {
+        let result = if std::path::Path::new(path).is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+
+        match result {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => panic!("failed to remove {path}: {err}"),
+        }
+    }
+}
+
 fn bench_insertions(c: &mut Criterion) {
     let mut group = c.benchmark_group("inserts");
 
@@ -18,11 +51,7 @@ fn bench_insertions(c: &mut Criterion) {
 
     // TODO: Add benchmarks for different batch sizes
 
-    // TODO: Improve the cleanups.
-    let _ = std::fs::remove_file("sqlite.db");
-    let _ = std::fs::remove_dir_all("sled.db");
-    let _ = std::fs::remove_file("rocksdb.db");
-    let _ = std::fs::remove_dir_all("file.db");
+    cleanup_stores();
 
     let mut memory_tree: MerkleTree<Keccak256Hasher, MemoryStore, 32> =
         MerkleTree::new(Keccak256Hasher, MemoryStore::default());
@@ -136,10 +165,7 @@ fn bench_insertions(c: &mut Criterion) {
      */
 
     // Cleanup
-    let _ = std::fs::remove_file("sqlite.db");
-    let _ = std::fs::remove_dir_all("sled.db");
-    let _ = std::fs::remove_file("rocksdb.db");
-    let _ = std::fs::remove_dir_all("file.db");
+    cleanup_stores();
 
     group.finish();
 }
@@ -151,11 +177,7 @@ fn bench_get_proof(c: &mut Criterion) {
         .sample_size(SAMPLE_SIZE as usize)
         .warm_up_time(std::time::Duration::from_millis(500));
 
-    // TODO: Improve the cleanups.
-    let _ = std::fs::remove_file("sqlite.db");
-    let _ = std::fs::remove_dir_all("sled.db");
-    let _ = std::fs::remove_file("rocksdb.db");
-    let _ = std::fs::remove_dir_all("file.db");
+    cleanup_stores();
 
     let mut memory_tree: MerkleTree<Keccak256Hasher, MemoryStore, 32> =
         MerkleTree::new(Keccak256Hasher, MemoryStore::default());
@@ -215,10 +237,7 @@ fn bench_get_proof(c: &mut Criterion) {
     });
 
     // Cleanup
-    let _ = std::fs::remove_file("sqlite.db");
-    let _ = std::fs::remove_dir_all("sled.db");
-    let _ = std::fs::remove_file("rocksdb.db");
-    let _ = std::fs::remove_dir_all("file.db");
+    cleanup_stores();
 
     group.finish();
 }
