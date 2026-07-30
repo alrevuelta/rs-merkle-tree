@@ -5,7 +5,6 @@
 use crate::hasher::{Hasher, Keccak256Hasher};
 use crate::{MerkleError, Node, Store};
 use core::ops::Index;
-use std::collections::HashMap;
 
 #[cfg(feature = "memory_store")]
 use crate::stores::MemoryStore;
@@ -84,92 +83,101 @@ where
         }
     }
 
+    /// Appends `leaves` to the tree and updates every ancestor they touch.
+    ///
+    /// Nodes are computed one level at a time rather than one leaf at a time.
+    /// The new leaves form a contiguous run at level 0, that run is paired up
+    /// into the run it produces at level 1, and so on to the root. Hashing a
+    /// level once instead of once per descendant leaf costs about `2 * leaves +
+    /// DEPTH` hashes per call instead of `leaves * DEPTH`, so the saving grows
+    /// with the batch size.
     pub fn add_leaves(&mut self, leaves: &[Node]) -> Result<(), MerkleError> {
         // Early return
         if leaves.is_empty() {
             return Ok(());
         }
 
+        let num_leaves = self.store.get_num_leaves();
+
         // Error if leaves do not fit in the tree
         // TODO: Avoid calculating this. Calculate it at init or do the shifting with the generic.
-        if self.store.get_num_leaves() + leaves.len() as u64 > (1 << DEPTH as u64) {
+        if num_leaves + leaves.len() as u64 > (1 << DEPTH as u64) {
             return Err(MerkleError::TreeFull {
                 depth: DEPTH as u32,
                 capacity: 1 << DEPTH as u64,
             });
         }
 
-        // Stores the levels and hashes to be written in a single batch.
-        // This allows to batch all writes in a single batch transaction.
-        let mut batch: Vec<(u32, u64, Node)> = Vec::with_capacity(leaves.len() * (DEPTH + 1));
-
-        // Cache for nodes generated in this batch so we can reuse them
-        let mut cache: HashMap<(u32, u64), Node> = HashMap::new();
-
-        for (offset, leaf) in leaves.iter().enumerate() {
-            let mut idx = self.store.get_num_leaves() + offset as u64;
-            let mut h = *leaf;
-
-            // Store the leaf
-            batch.push((0, idx, h));
-            cache.insert((0, idx), h);
-
-            // Collect siblings that are not already cached so we can fetch them in one batch.
-            let mut levels_to_fetch = [0u32; DEPTH];
-            let mut indices_to_fetch = [0u64; DEPTH];
-            let mut fetch_len = 0usize;
-
-            let mut tmp_idx = idx;
-            for lvl in 0..DEPTH {
-                let sibling_idx = tmp_idx ^ 1;
-                if !cache.contains_key(&(lvl as u32, sibling_idx)) {
-                    levels_to_fetch[fetch_len] = lvl as u32;
-                    indices_to_fetch[fetch_len] = sibling_idx;
-                    fetch_len += 1;
-                }
-                tmp_idx >>= 1;
-            }
-
-            // Batch-fetch the missing siblings and insert them in cache.
-            if fetch_len != 0 {
-                let fetched = self.store.get(
-                    &levels_to_fetch[..fetch_len],
-                    &indices_to_fetch[..fetch_len],
-                )?;
-
-                for (i, maybe_node) in fetched.into_iter().enumerate() {
-                    if let Some(node) = maybe_node {
-                        cache.insert((levels_to_fetch[i], indices_to_fetch[i]), node);
-                    }
-                }
-            }
-
-            for level in 0..DEPTH {
-                let sibling_idx = idx ^ 1;
-
-                let sib_hash = cache
-                    .get(&(level as u32, sibling_idx))
-                    .copied()
-                    .unwrap_or(self.zeros[level]);
-
-                let (left, right) = if idx & 1 == 1 {
-                    (sib_hash, h)
-                } else {
-                    (h, sib_hash)
-                };
-
-                h = self.hasher.hash(&left, &right);
-                idx >>= 1;
-
-                batch.push(((level + 1) as u32, idx, h));
-                cache.insert(((level + 1) as u32, idx), h);
+        // The run at level `l` starts at `num_leaves >> l`, so which left
+        // partners are missing is known before hashing and they all fit in a
+        // single read.
+        let mut fetch_levels = [0u32; DEPTH];
+        let mut fetch_indices = [0u64; DEPTH];
+        let mut fetch_len = 0usize;
+        for level in 0..DEPTH {
+            let start = num_leaves >> level;
+            if start & 1 == 1 {
+                fetch_levels[fetch_len] = level as u32;
+                fetch_indices[fetch_len] = start - 1;
+                fetch_len += 1;
             }
         }
 
-        // Update all values in a single batch
-        self.store.put(&batch)?;
+        // A partner left of a run start is always inside the stored prefix, so
+        // `None` cannot happen; treating it as zero keeps this consistent with
+        // how the tree reads every other absent node.
+        let mut left_partners = [Node::ZERO; DEPTH];
+        let fetched = self
+            .store
+            .get(&fetch_levels[..fetch_len], &fetch_indices[..fetch_len])?;
+        for (&level, node) in fetch_levels[..fetch_len].iter().zip(fetched) {
+            let level = level as usize;
+            left_partners[level] = node.unwrap_or(self.zeros[level]);
+        }
 
-        Ok(())
+        // Every node this call writes, tagged with its position, so the store
+        // sees one batch. Each node is emitted exactly once.
+        let mut batch: Vec<(u32, u64, Node)> = Vec::with_capacity(2 * leaves.len() + DEPTH);
+
+        let mut start = num_leaves;
+        let mut nodes = leaves.to_vec();
+        batch.extend(
+            nodes
+                .iter()
+                .enumerate()
+                .map(|(i, &node)| (0, start + i as u64, node)),
+        );
+
+        // Swapped with `nodes` each level, so both buffers are allocated once
+        // and reused: every level is at most half the size of the one below.
+        let mut parents: Vec<Node> = Vec::with_capacity(nodes.len() / 2 + 1);
+
+        for (level, left_partner) in left_partners.iter().enumerate() {
+            parents.clear();
+
+            let pairs = if start & 1 == 1 {
+                parents.push(self.hasher.hash(left_partner, &nodes[0]));
+                &nodes[1..]
+            } else {
+                &nodes[..]
+            };
+            for pair in pairs.chunks(2) {
+                let right = pair.get(1).unwrap_or(&self.zeros[level]);
+                parents.push(self.hasher.hash(&pair[0], right));
+            }
+
+            start >>= 1;
+            std::mem::swap(&mut nodes, &mut parents);
+            batch.extend(
+                nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &node)| ((level + 1) as u32, start + i as u64, node)),
+            );
+        }
+
+        // Update all values in a single batch
+        self.store.put(&batch)
     }
 
     pub fn root(&self) -> Result<Node, MerkleError> {
@@ -370,6 +378,48 @@ mod tests {
             assert_eq!(zero, &expected_zeros[i]);
         }
         assert_eq!(tree.zeros.last, expected_zeros[32]);
+    }
+
+    #[cfg(feature = "memory_store")]
+    #[test]
+    fn test_batching_matches_incremental() {
+        const DEPTH: usize = 8;
+        type Tree = MerkleTree<Keccak256Hasher, MemoryStore, DEPTH>;
+        let new_tree = || Tree::new(Keccak256Hasher, MemoryStore::default());
+
+        let leaves: Vec<Node> = (0..100)
+            .map(|i| to_node!(format!("0x{:064x}", i).as_str()))
+            .collect();
+
+        // One leaf per call never has a run to pair up, so it is the reference
+        // the batched paths must reproduce.
+        let mut reference = new_tree();
+        for leaf in &leaves {
+            reference.add_leaves(&[*leaf]).unwrap();
+        }
+        let expected = reference.root().unwrap();
+
+        // Odd sizes leave the frontier on an odd index, forcing the next call
+        // to pair its run against stored left partners; sizes above a power of
+        // two make a run span more than one parent at the upper levels.
+        for size in [1, 2, 3, 5, 7, 8, 16, 33, 99, 100] {
+            let mut tree = new_tree();
+            for batch in leaves.chunks(size) {
+                tree.add_leaves(batch).unwrap();
+            }
+
+            assert_eq!(tree.num_leaves(), leaves.len() as u64, "batch size {size}");
+            assert_eq!(tree.root().unwrap(), expected, "batch size {size}");
+
+            for (i, leaf) in leaves.iter().enumerate() {
+                let proof = tree.proof(i as u64).unwrap();
+                assert_eq!(&proof.leaf, leaf, "batch size {size}, leaf {i}");
+                assert!(
+                    tree.verify_proof(&proof).unwrap(),
+                    "batch size {size}, leaf {i}"
+                );
+            }
+        }
     }
 
     #[cfg(feature = "memory_store")]
