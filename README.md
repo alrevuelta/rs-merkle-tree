@@ -143,34 +143,27 @@ And you can generate the following table with this.
 python benchmarks.py
 ```
 
-### Disk space usage
-
-| Store | Depth | Leaves | Size (MiB) |
-|---|---|---|---|
-| sled | 32 | 1000000 | 290.00 |
-| sqlite | 32 | 1000000 | 159.18 |
-| rocksdb | 32 | 1000000 | 183.27 |
-| file | 32 | 1000000 | 61.04 |
+## Benchmarks
 
 ### `add_leaves` throughput
 
-| Depth | Hash | Store | Throughput (Kelem/s) |
-|---|---|---|---|
-| 32 | keccak256 | rocksdb | 18.047 |
-| 32 | keccak256 | sqlite | 31.300 |
-| 32 | keccak256 | sled | 62.861 |
-| 32 | keccak256 | file | 135.790 |
-| 32 | keccak256 | memory | 142.940 |
+| Depth | Hash | Leaves | Batch | Store | Throughput | p50 batch | p99 batch | Disk |
+|---|---|---|---|---|---|---|---|---|
+| 32 | keccak256 | 1000000 | 1000 | memory | 4.827 Melem/s | 189.084 µs | 473.167 µs | - |
+| 32 | keccak256 | 1000000 | 1000 | file | 4.214 Melem/s | 232.750 µs | 349.000 µs | 61.04 MiB |
+| 32 | keccak256 | 1000000 | 1000 | rocksdb | 2.622 Melem/s | 380.500 µs | 472.541 µs | 88.70 MiB |
+| 32 | keccak256 | 1000000 | 1000 | sqlite | 731.882 Kelem/s | 1.181 ms | 4.470 ms | 116.88 MiB |
+| 32 | keccak256 | 1000000 | 1000 | sled | 348.847 Kelem/s | 2.799 ms | 4.665 ms | 646.00 MiB |
 
 ### `proof` time
 
 | Depth | Hash | Store | Time |
 |---|---|---|---|
-| 32 | keccak256 | memory | 188.280 ns |
-| 32 | keccak256 | file | 5.150 µs |
-| 32 | keccak256 | sled | 6.439 µs |
-| 32 | keccak256 | sqlite | 11.341 µs |
-| 32 | keccak256 | rocksdb | 41.998 µs |
+| 32 | keccak256 | memory | 187.910 ns |
+| 32 | keccak256 | file | 4.779 µs |
+| 32 | keccak256 | sled | 6.268 µs |
+| 32 | keccak256 | sqlite | 11.226 µs |
+| 32 | keccak256 | rocksdb | 12.585 µs |
 
 ## License
 

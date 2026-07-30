@@ -34,67 +34,6 @@ def _disk_table(rows: List[DiskRow]) -> str:
     )
     return f"{header}\n{body}"
 
-# depth, hash, store, elem_per_sec
-BenchRow = Tuple[int, str, str, float]
-
-# "inserts/sqlite_store/depth32_keccak256"
-_BENCH_NAME_RE = re.compile(
-    r"inserts/(?P<store>[a-zA-Z0-9]+)_store/" r"depth(?P<depth>\d+)_(?P<hash>[a-zA-Z0-9]+)",
-)
-# "thrpt:  [10.420 Kelem/s 10.444 Kelem/s 10.468 Kelem/s]"
-# Criterion picks the SI prefix per benchmark, so it must not be hardcoded.
-_THRPT_RE = re.compile(
-    r"thrpt:\s*\[\s*(?P<low>[\d.]+)\s+[KMG]?elem/s\s+"
-    r"(?P<mid>[\d.]+)\s+(?P<unit>[KMG]?)elem/s"
-)
-_THRPT_FACTOR = {"": 1.0, "K": 1e3, "M": 1e6, "G": 1e9}
-
-
-def _parse_bench(lines: Iterable[str]) -> List[BenchRow]:
-    rows: List[BenchRow] = []
-    # depth, hash, store
-    current: tuple[int, str, str] | None = None
-
-    for line in lines:
-        if m := _BENCH_NAME_RE.search(line):
-            store = m.group("store")
-            depth = int(m.group("depth"))
-            hash_alg = m.group("hash")
-            current = (depth, hash_alg, store)
-            continue
-
-        if current is None or "thrpt:" not in line:
-            continue
-
-        if thrpt_m := _THRPT_RE.search(line):
-            elem_s = float(thrpt_m.group("mid")) * _THRPT_FACTOR[thrpt_m.group("unit")]
-            depth, hash_alg, store = current
-            rows.append((depth, hash_alg, store, elem_s))
-        # Drop the pending benchmark either way, so an unrecognised line cannot
-        # attach a later measurement to the wrong benchmark.
-        current = None
-
-    rows.sort(key=lambda row: row[3], reverse=True)  # fastest first
-    return rows
-
-
-def _bench_table(rows: List[BenchRow]) -> str:
-    def _best_unit(elem_s: float) -> tuple[float, str]:
-        """Return value and unit chosen to keep number in readable range."""
-        for factor, unit in ((1e9, "Gelem/s"), (1e6, "Melem/s"), (1e3, "Kelem/s")):
-            if elem_s >= factor:
-                return elem_s / factor, unit
-        return elem_s, "elem/s"
-
-    header = "| Depth | Hash | Store | Throughput |\n" + "|---|---|---|---|"
-    lines: list[str] = []
-    for depth, hash_alg, store, elem_s in rows:
-        val, unit = _best_unit(elem_s)
-        lines.append(f"| {depth} | {hash_alg} | {store} | {val:.3f} {unit} |")
-
-    body = "\n".join(lines)
-    return f"{header}\n{body}"
-
 # depth, hash, store, time_ms
 ProofRow = Tuple[int, str, str, float]
 
@@ -161,16 +100,11 @@ def _proof_table(rows: List[ProofRow]) -> str:
     body = "\n".join(lines)
     return f"{header}\n{body}"
 
-def _run(cmd: str | list[str]) -> list[str]:
-    if isinstance(cmd, str):
-        full_cmd = cmd
-        cmd_list = shlex.split(cmd)
-    else:
-        cmd_list = cmd
-        full_cmd = " ".join(cmd)
-
+def _run(cmd: str | list[str], include_stderr: bool = True) -> list[str]:
+    cmd_list = shlex.split(cmd) if isinstance(cmd, str) else cmd
     result = subprocess.run(cmd_list, check=True, capture_output=True, text=True)
-    return (result.stdout + result.stderr).splitlines()
+    output = result.stdout + result.stderr if include_stderr else result.stdout
+    return output.splitlines()
 
 
 def main() -> None:
@@ -185,17 +119,19 @@ def main() -> None:
         print(_disk_table(disk_rows))
         print()
 
-    # Run benches
-    bench_lines = _run("cargo bench --features all")
-
-    bench_rows = _parse_bench(bench_lines)
-    if bench_rows:
-        # TODO: Add to the table the batch size. Use different batch sizes.
+    # The insertions bench is not a Criterion benchmark: it prints the markdown
+    # table itself on stdout, so there is nothing to parse here. Progress goes to
+    # stderr and is left out.
+    # TODO: Report several batch sizes, the harness takes --batch.
+    insert_table = "\n".join(
+        _run("cargo bench --features all --bench insertions", include_stderr=False)
+    ).strip()
+    if insert_table:
         print("### `add_leaves` throughput\n")
-        print(_bench_table(bench_rows))
+        print(insert_table)
         print()
 
-    proof_rows = _parse_proof(bench_lines)
+    proof_rows = _parse_proof(_run("cargo bench --features all --bench benchmarks"))
     if proof_rows:
         print("### `proof` time\n")
         print(_proof_table(proof_rows))

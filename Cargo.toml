@@ -32,9 +32,16 @@ mockall = "0.12"
 proptest = "1.4"
 test-case = "3.3"
 temp-file = "0.1.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [[bench]]
 name = "benchmarks"
+harness = false
+required-features = ["all"]
+
+[[bench]]
+name = "insertions"
 harness = false
 required-features = ["all"]
 
