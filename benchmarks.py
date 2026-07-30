@@ -34,17 +34,20 @@ def _disk_table(rows: List[DiskRow]) -> str:
     )
     return f"{header}\n{body}"
 
-# depth, hash, store, kelem_per_sec
+# depth, hash, store, elem_per_sec
 BenchRow = Tuple[int, str, str, float]
 
 # "inserts/sqlite_store/depth32_keccak256"
 _BENCH_NAME_RE = re.compile(
     r"inserts/(?P<store>[a-zA-Z0-9]+)_store/" r"depth(?P<depth>\d+)_(?P<hash>[a-zA-Z0-9]+)",
 )
-# [10.420 Kelem/s 10.444 Kelem/s 10.468 Kelem/s]"
+# "thrpt:  [10.420 Kelem/s 10.444 Kelem/s 10.468 Kelem/s]"
+# Criterion picks the SI prefix per benchmark, so it must not be hardcoded.
 _THRPT_RE = re.compile(
-    r"thrpt:\s*\[\s*(?P<low>[\d.]+)\s+Kelem/s\s+(?P<mid>[\d.]+)\s+Kelem/s\s+(?P<high>[\d.]+)\s+Kelem/s"  # noqa: W605
+    r"thrpt:\s*\[\s*(?P<low>[\d.]+)\s+[KMG]?elem/s\s+"
+    r"(?P<mid>[\d.]+)\s+(?P<unit>[KMG]?)elem/s"
 )
+_THRPT_FACTOR = {"": 1.0, "K": 1e3, "M": 1e6, "G": 1e9}
 
 
 def _parse_bench(lines: Iterable[str]) -> List[BenchRow]:
@@ -60,22 +63,36 @@ def _parse_bench(lines: Iterable[str]) -> List[BenchRow]:
             current = (depth, hash_alg, store)
             continue
 
-        if current and (thrpt_m := _THRPT_RE.search(line)):
-            kelem_s = float(thrpt_m.group("mid"))
-            depth, hash_alg, store = current
-            rows.append((depth, hash_alg, store, kelem_s))
-            current = None
+        if current is None or "thrpt:" not in line:
+            continue
 
-    rows.sort(key=lambda row: row[3])
+        if thrpt_m := _THRPT_RE.search(line):
+            elem_s = float(thrpt_m.group("mid")) * _THRPT_FACTOR[thrpt_m.group("unit")]
+            depth, hash_alg, store = current
+            rows.append((depth, hash_alg, store, elem_s))
+        # Drop the pending benchmark either way, so an unrecognised line cannot
+        # attach a later measurement to the wrong benchmark.
+        current = None
+
+    rows.sort(key=lambda row: row[3], reverse=True)  # fastest first
     return rows
 
 
 def _bench_table(rows: List[BenchRow]) -> str:
-    header = "| Depth | Hash | Store | Throughput (Kelem/s) |\n" + "|---|---|---|---|"
-    body = "\n".join(
-        f"| {depth} | {hash_alg} | {store} | {kelem:.3f} |"
-        for depth, hash_alg, store, kelem in rows
-    )
+    def _best_unit(elem_s: float) -> tuple[float, str]:
+        """Return value and unit chosen to keep number in readable range."""
+        for factor, unit in ((1e9, "Gelem/s"), (1e6, "Melem/s"), (1e3, "Kelem/s")):
+            if elem_s >= factor:
+                return elem_s / factor, unit
+        return elem_s, "elem/s"
+
+    header = "| Depth | Hash | Store | Throughput |\n" + "|---|---|---|---|"
+    lines: list[str] = []
+    for depth, hash_alg, store, elem_s in rows:
+        val, unit = _best_unit(elem_s)
+        lines.append(f"| {depth} | {hash_alg} | {store} | {val:.3f} {unit} |")
+
+    body = "\n".join(lines)
     return f"{header}\n{body}"
 
 # depth, hash, store, time_ms
