@@ -88,7 +88,7 @@ where
     /// Nodes are computed one level at a time rather than one leaf at a time.
     /// The new leaves form a contiguous run at level 0, that run is paired up
     /// into the run it produces at level 1, and so on to the root. Hashing a
-    /// level once instead of once per descendant leaf costs about `2 * leaves +
+    /// level once instead of once per descendant leaf costs at most `leaves +
     /// DEPTH` hashes per call instead of `leaves * DEPTH`, so the saving grows
     /// with the batch size.
     pub fn add_leaves(&mut self, leaves: &[Node]) -> Result<(), MerkleError> {
@@ -148,12 +148,8 @@ where
                 .map(|(i, &node)| (0, start + i as u64, node)),
         );
 
-        // Swapped with `nodes` each level, so both buffers are allocated once
-        // and reused: every level is at most half the size of the one below.
-        let mut parents: Vec<Node> = Vec::with_capacity(nodes.len() / 2 + 1);
-
         for (level, left_partner) in left_partners.iter().enumerate() {
-            parents.clear();
+            let mut parents: Vec<Node> = Vec::with_capacity(nodes.len() / 2 + 1);
 
             let pairs = if start & 1 == 1 {
                 parents.push(self.hasher.hash(left_partner, &nodes[0]));
@@ -167,7 +163,7 @@ where
             }
 
             start >>= 1;
-            std::mem::swap(&mut nodes, &mut parents);
+            nodes = parents;
             batch.extend(
                 nodes
                     .iter()
@@ -378,6 +374,51 @@ mod tests {
             assert_eq!(zero, &expected_zeros[i]);
         }
         assert_eq!(tree.zeros.last, expected_zeros[32]);
+    }
+
+    /// Roots the fully padded tree bottom up, sharing no logic with the
+    /// incremental path: no runs, no frontier, no stored state.
+    #[cfg(feature = "memory_store")]
+    fn reference_root(hasher: &Keccak256Hasher, depth: usize, leaves: &[Node]) -> Node {
+        let mut level = vec![Node::ZERO; 1 << depth];
+        level[..leaves.len()].copy_from_slice(leaves);
+        for _ in 0..depth {
+            level = level
+                .chunks(2)
+                .map(|pair| hasher.hash(&pair[0], &pair[1]))
+                .collect();
+        }
+        level[0]
+    }
+
+    #[cfg(feature = "memory_store")]
+    #[test]
+    fn test_root_matches_full_recomputation() {
+        const DEPTH: usize = 8;
+
+        for num_leaves in [1usize, 2, 3, 8, 9, 100, 255, 256] {
+            // Leaves are non-zero so that a node left unwritten by mistake
+            // cannot pass as the padding it sits next to.
+            let leaves: Vec<Node> = (1..=num_leaves)
+                .map(|i| to_node!(format!("0x{:064x}", i).as_str()))
+                .collect();
+            let expected = reference_root(&Keccak256Hasher, DEPTH, &leaves);
+
+            for size in [1, 3, 16, 256] {
+                let mut tree = MerkleTree::<Keccak256Hasher, MemoryStore, DEPTH>::new(
+                    Keccak256Hasher,
+                    MemoryStore::default(),
+                );
+                for batch in leaves.chunks(size) {
+                    tree.add_leaves(batch).unwrap();
+                }
+                assert_eq!(
+                    tree.root().unwrap(),
+                    expected,
+                    "{num_leaves} leaves in batches of {size}"
+                );
+            }
+        }
     }
 
     #[cfg(feature = "memory_store")]

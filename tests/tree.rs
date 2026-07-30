@@ -76,6 +76,55 @@ fn test_merkle_tree_keccak_32_memory() {
     // TODO: Once async is implemented, ensure proofs are always consistent.
 }
 
+#[cfg(all(feature = "file_store", feature = "memory_store"))]
+#[test]
+fn test_merkle_tree_keccak_32_file() {
+    let dir = std::env::temp_dir().join(format!("rs-merkle-tree-golden-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let path = dir.to_str().expect("utf-8 temp path").to_owned();
+
+    let leaves = (0..10_001)
+        .map(|i| to_node!(format!("0x{:064x}", i).as_str()))
+        .collect::<Vec<Node>>();
+
+    // The same golden root as the memory store, reached through the on-disk
+    // layout. FileStore rejects any batch that is not one contiguous run per
+    // level, so this also pins the shape `add_leaves` emits at all 33 levels.
+    let mut tree: MerkleTree<Keccak256Hasher, FileStore, 32> =
+        MerkleTree::new(Keccak256Hasher, FileStore::new(&path));
+    for batch in leaves[..10_000].chunks(1_000) {
+        tree.add_leaves(batch).unwrap();
+    }
+
+    assert_eq!(tree.num_leaves(), 10_000);
+    assert_eq!(
+        tree.root().unwrap(),
+        to_node!("0x532c79f3ea0f4873946d1b14770eaa1c157255a003e73da987b858cc287b0482")
+    );
+
+    // Appending after a reopen is the only path that reads left partners back
+    // from disk rather than from nodes this process just wrote.
+    drop(tree);
+    let mut tree: MerkleTree<Keccak256Hasher, FileStore, 32> =
+        MerkleTree::new(Keccak256Hasher, FileStore::new(&path));
+    assert_eq!(tree.num_leaves(), 10_000);
+    tree.add_leaves(&leaves[10_000..]).unwrap();
+
+    let mut expected: MerkleTree32 = MerkleTree::new(Keccak256Hasher, MemoryStore::default());
+    expected.add_leaves(&leaves).unwrap();
+
+    assert_eq!(tree.num_leaves(), 10_001);
+    assert_eq!(tree.root().unwrap(), expected.root().unwrap());
+
+    for i in [0, 1, 4_999, 9_999, 10_000] {
+        let proof = tree.proof(i).unwrap();
+        assert_eq!(proof.leaf, leaves[i as usize]);
+        assert!(tree.verify_proof(&proof).unwrap());
+    }
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 #[cfg(any(
     feature = "sled_store",
     feature = "sqlite_store",
