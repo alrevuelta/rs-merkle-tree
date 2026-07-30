@@ -31,7 +31,7 @@ const ROOT: &str = "bench_stores";
 
 /// Leaves inserted into every store. Fixed rather than configurable so that two
 /// runs, on any machine, always describe the same workload.
-const LEAVES: u64 = 1_000_000;
+const LEAVES: u64 = 5_000_000;
 
 const DEFAULT_BATCH: u64 = 1_000;
 
