@@ -5,6 +5,7 @@
 use crate::hasher::{Hasher, Keccak256Hasher};
 use crate::{MerkleError, Node, Store};
 use core::ops::Index;
+use rayon::prelude::*;
 
 #[cfg(feature = "memory_store")]
 use crate::stores::MemoryStore;
@@ -42,6 +43,10 @@ pub struct Zeros<const DEPTH: usize> {
     front: [Node; DEPTH],
     last: Node,
 }
+
+/// Below this many hashes, Rayon scheduling costs more than serial hashing for
+/// inexpensive hashers such as Keccak-256.
+const MIN_PARALLEL_HASHES: usize = 64;
 
 // TODO: Maybe use "typenum" crate to avoid this.
 impl<const DEPTH: usize> Index<usize> for Zeros<DEPTH> {
@@ -90,8 +95,12 @@ where
     /// into the run it produces at level 1, and so on to the root. Hashing a
     /// level once instead of once per descendant leaf costs at most `leaves +
     /// DEPTH` hashes per call instead of `leaves * DEPTH`, so the saving grows
-    /// with the batch size.
-    pub fn add_leaves(&mut self, leaves: &[Node]) -> Result<(), MerkleError> {
+    /// with the batch size. Independent pairs on sufficiently large levels are
+    /// hashed in parallel on Rayon's global thread pool.
+    pub fn add_leaves(&mut self, leaves: &[Node]) -> Result<(), MerkleError>
+    where
+        H: Sync,
+    {
         // Early return
         if leaves.is_empty() {
             return Ok(());
@@ -157,9 +166,15 @@ where
             } else {
                 &nodes[..]
             };
-            for pair in pairs.chunks(2) {
+
+            let hash_pair = |pair: &[Node]| {
                 let right = pair.get(1).unwrap_or(&self.zeros[level]);
-                parents.push(self.hasher.hash(&pair[0], right));
+                self.hasher.hash(&pair[0], right)
+            };
+            if pairs.len().div_ceil(2) >= MIN_PARALLEL_HASHES {
+                parents.par_extend(pairs.par_chunks(2).map(hash_pair));
+            } else {
+                parents.extend(pairs.chunks(2).map(hash_pair));
             }
 
             start >>= 1;
@@ -418,6 +433,30 @@ mod tests {
                     "{num_leaves} leaves in batches of {size}"
                 );
             }
+        }
+    }
+
+    #[cfg(feature = "memory_store")]
+    #[test]
+    fn test_parallel_batch_after_odd_prefix() {
+        const DEPTH: usize = 8;
+        let leaves: Vec<Node> = (1..=1 << DEPTH)
+            .map(|i| to_node!(format!("0x{:064x}", i).as_str()))
+            .collect();
+        let expected = reference_root(&Keccak256Hasher, DEPTH, &leaves);
+        let mut tree = MerkleTree::<Keccak256Hasher, MemoryStore, DEPTH>::new(
+            Keccak256Hasher,
+            MemoryStore::default(),
+        );
+
+        tree.add_leaves(&leaves[..1]).unwrap();
+        tree.add_leaves(&leaves[1..]).unwrap();
+
+        assert_eq!(tree.root().unwrap(), expected);
+        for index in [0, 1, 127, 128, 255] {
+            let proof = tree.proof(index).unwrap();
+            assert_eq!(proof.leaf, leaves[index as usize]);
+            assert!(tree.verify_proof(&proof).unwrap());
         }
     }
 
