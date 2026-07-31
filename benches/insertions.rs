@@ -33,7 +33,7 @@ const ROOT: &str = "bench_stores";
 /// runs, on any machine, always describe the same workload.
 const LEAVES: u64 = 5_000_000;
 
-const DEFAULT_BATCH: u64 = 1_000;
+const DEFAULT_BATCH: u64 = 100_000;
 
 /// Equal slices the run is cut into for the per-slice throughput reported in
 /// JSON. A decreasing series is how a store that degrades as it fills shows up.
