@@ -149,21 +149,21 @@ python benchmarks.py
 
 | Depth | Hash | Leaves | Batch | Store | Throughput | p50 batch | p99 batch | Disk |
 |---|---|---|---|---|---|---|---|---|
-| 32 | keccak256 | 1000000 | 1000 | memory | 4.827 Melem/s | 189.084 µs | 473.167 µs | - |
-| 32 | keccak256 | 1000000 | 1000 | file | 4.214 Melem/s | 232.750 µs | 349.000 µs | 61.04 MiB |
-| 32 | keccak256 | 1000000 | 1000 | rocksdb | 2.622 Melem/s | 380.500 µs | 472.541 µs | 88.70 MiB |
-| 32 | keccak256 | 1000000 | 1000 | sqlite | 731.882 Kelem/s | 1.181 ms | 4.470 ms | 116.88 MiB |
-| 32 | keccak256 | 1000000 | 1000 | sled | 348.847 Kelem/s | 2.799 ms | 4.665 ms | 646.00 MiB |
+| 32 | keccak256 | 5000000 | 100000 | memory | 23.667 Melem/s | 3.961 ms | 8.534 ms | - |
+| 32 | keccak256 | 5000000 | 100000 | file | 19.883 Melem/s | 4.551 ms | 15.335 ms | 305.18 MiB |
+| 32 | keccak256 | 5000000 | 100000 | rocksdb | 4.489 Melem/s | 22.324 ms | 24.710 ms | 434.26 MiB |
+| 32 | keccak256 | 5000000 | 100000 | sqlite | 886.759 Kelem/s | 112.151 ms | 135.632 ms | 590.39 MiB |
+| 32 | keccak256 | 5000000 | 100000 | sled | 218.799 Kelem/s | 463.476 ms | 541.145 ms | 1.00 GiB |
 
 ### `proof` time
 
 | Depth | Hash | Store | Time |
 |---|---|---|---|
-| 32 | keccak256 | memory | 187.910 ns |
-| 32 | keccak256 | file | 4.779 µs |
-| 32 | keccak256 | sled | 6.268 µs |
-| 32 | keccak256 | sqlite | 11.226 µs |
-| 32 | keccak256 | rocksdb | 12.585 µs |
+| 32 | keccak256 | memory | 191.740 ns |
+| 32 | keccak256 | file | 4.869 µs |
+| 32 | keccak256 | sled | 6.571 µs |
+| 32 | keccak256 | sqlite | 11.411 µs |
+| 32 | keccak256 | rocksdb | 12.693 µs |
 
 ## License
 
