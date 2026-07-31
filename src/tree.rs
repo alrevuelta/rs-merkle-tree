@@ -171,7 +171,7 @@ where
                 let right = pair.get(1).unwrap_or(&self.zeros[level]);
                 self.hasher.hash(&pair[0], right)
             };
-            if pairs.len().div_ceil(2) >= MIN_PARALLEL_HASHES {
+            if pairs.len() >= 2 * MIN_PARALLEL_HASHES {
                 parents.par_extend(pairs.par_chunks(2).map(hash_pair));
             } else {
                 parents.extend(pairs.chunks(2).map(hash_pair));
