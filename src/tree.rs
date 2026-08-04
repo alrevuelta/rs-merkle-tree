@@ -144,18 +144,12 @@ where
             left_partners[level] = node.unwrap_or(self.zeros[level]);
         }
 
-        // Every node this call writes, tagged with its position, so the store
-        // sees one batch. Each node is emitted exactly once.
-        let mut batch: Vec<(u32, u64, Node)> = Vec::with_capacity(2 * leaves.len() + DEPTH);
-
+        // The nodes this call writes at level `l` are one contiguous run
+        // starting at `num_leaves >> l`, so each level goes to the store whole,
+        // as the run it is, and the store never has to sort positions out.
         let mut start = num_leaves;
         let mut nodes = leaves.to_vec();
-        batch.extend(
-            nodes
-                .iter()
-                .enumerate()
-                .map(|(i, &node)| (0, start + i as u64, node)),
-        );
+        self.store.put(0, start, &nodes)?;
 
         for (level, left_partner) in left_partners.iter().enumerate() {
             let mut parents: Vec<Node> = Vec::with_capacity(nodes.len() / 2 + 1);
@@ -179,16 +173,10 @@ where
 
             start >>= 1;
             nodes = parents;
-            batch.extend(
-                nodes
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &node)| ((level + 1) as u32, start + i as u64, node)),
-            );
+            self.store.put((level + 1) as u32, start, &nodes)?;
         }
 
-        // Update all values in a single batch
-        self.store.put(&batch)
+        Ok(())
     }
 
     pub fn root(&self) -> Result<Node, MerkleError> {

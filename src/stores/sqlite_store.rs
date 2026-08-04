@@ -156,7 +156,11 @@ impl Store for SqliteStore {
         .collect::<Result<Vec<_>, _>>()
     }
 
-    fn put(&mut self, items: &[(u32, u64, Node)]) -> Result<(), MerkleError> {
+    fn put(&mut self, level: u32, start: u64, nodes: &[Node]) -> Result<(), MerkleError> {
+        if nodes.is_empty() {
+            return Ok(());
+        }
+
         let tx = self.conn.transaction().map_err(Self::db_error)?;
 
         {
@@ -166,26 +170,31 @@ impl Store for SqliteStore {
                 )
                 .map_err(Self::db_error)?;
 
-            for (level, index, node) in items {
+            for (offset, node) in nodes.iter().enumerate() {
                 insert_stmt
-                    .execute(params![*level as i64, *index as i64, node.as_ref()])
+                    .execute(params![
+                        level as i64,
+                        (start + offset as u64) as i64,
+                        node.as_ref()
+                    ])
                     .map_err(Self::db_error)?;
             }
         }
 
-        let counter = items.iter().filter(|(level, _, _)| *level == 0).count() as u64;
-        if counter > 0 {
-            let new_leaves = self.num_leaves + counter;
+        let num_leaves = if level == 0 {
+            let num_leaves = self.num_leaves.max(start + nodes.len() as u64);
             tx.execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
-                params![Self::KEY_NUM_LEAVES, new_leaves.to_be_bytes().to_vec()],
+                params![Self::KEY_NUM_LEAVES, num_leaves.to_be_bytes().to_vec()],
             )
             .map_err(Self::db_error)?;
-
-            self.num_leaves = new_leaves;
-        }
+            num_leaves
+        } else {
+            self.num_leaves
+        };
 
         tx.commit().map_err(Self::db_error)?;
+        self.num_leaves = num_leaves;
         Ok(())
     }
 

@@ -114,76 +114,32 @@ impl Store for FileStore {
             .collect()
     }
 
-    fn put(&mut self, items: &[(u32, u64, Node)]) -> Result<(), MerkleError> {
-        if items.is_empty() {
+    /// One positional write per call, straight out of the caller's slice.
+    ///
+    /// A run is already laid out exactly as the level file holds it, so there is
+    /// nothing to serialise: `Node::as_bytes` reinterprets it and the kernel
+    /// copies it once. The only validation left is that the run does not start
+    /// past the stored prefix, which is a single comparison per call rather than
+    /// per node.
+    fn put(&mut self, level: u32, start: u64, nodes: &[Node]) -> Result<(), MerkleError> {
+        if nodes.is_empty() {
             return Ok(());
         }
 
-        // Writes are batched per level, so here we rearrange items to have a single sequence of bytes
-        // to append to each level. Check are also performed to ensure its trully append only without
-        // out of sequence stores.
+        let level = level as usize;
+        self.ensure_level(level)?;
 
-        // A batch can rewrite the same right-spine node once per leaf, and the
-        // indices it touches at each level form one contiguous run. Buffer one
-        // run per level, then flush each with a single positional write.
-        let max_level = items.iter().map(|&(level, _, _)| level).max().unwrap() as usize;
-        self.ensure_level(max_level)?;
-
-        // Per level: the index the run starts at, and its nodes. Note elements can be empty
-        // meaning there is nothing to write at that level.
-        let mut runs: Vec<(u64, Vec<Node>)> = vec![(0, Vec::new()); max_level + 1];
-
-        for &(level, index, node) in items {
-            let level = level as usize;
-            let (start, run) = &mut runs[level];
-
-            // The level's first entry fixes where its run starts. The batch may
-            // append at the end of the stored prefix or rewrite inside it, but
-            // starting past it would leave a hole that reads back as a node.
-            if run.is_empty() {
-                if index > self.counts[level] {
-                    return Err(io_err(format!(
-                        "put batch at level {level} starts at index {index}, past the stored prefix of {}",
-                        self.counts[level]
-                    )));
-                }
-                *start = index;
-            }
-
-            // Position within the run. Only two placements keep it contiguous:
-            // overwriting a node already buffered (last write wins), or
-            // extending it by one. Anything else would leave a hole, and
-            // growing only by `push` keeps the run bounded by the batch size,
-            // so an absurd index errors instead of allocating its span.
-            match index
-                .checked_sub(*start)
-                .and_then(|rel| usize::try_from(rel).ok())
-            {
-                Some(rel) if rel < run.len() => run[rel] = node,
-                Some(rel) if rel == run.len() => run.push(node),
-                _ => {
-                    return Err(io_err(format!(
-                        "non-contiguous put batch at level {level}: index {index} is not contiguous with [{}, {})",
-                        *start,
-                        *start + run.len() as u64
-                    )));
-                }
-            }
+        if start > self.counts[level] {
+            return Err(io_err(format!(
+                "put at level {level} starts at index {start}, past the stored prefix of {}",
+                self.counts[level]
+            )));
         }
 
-        for (level, (start, run)) in runs.into_iter().enumerate() {
-            if run.is_empty() {
-                continue;
-            }
-            let mut bytes = Vec::with_capacity(run.len() * Node::LEN);
-            for node in &run {
-                bytes.extend_from_slice(node.as_ref());
-            }
-            self.files[level]
-                .write_all_at(&bytes, start * Node::LEN as u64)
-                .map_err(io_err)?;
-            self.counts[level] = self.counts[level].max(start + run.len() as u64);
-        }
+        self.files[level]
+            .write_all_at(Node::as_bytes(nodes), start * Node::LEN as u64)
+            .map_err(io_err)?;
+        self.counts[level] = self.counts[level].max(start + nodes.len() as u64);
 
         Ok(())
     }
@@ -211,20 +167,14 @@ mod tests {
     }
 
     #[test]
-    fn put_get_roundtrip_with_duplicates() {
+    fn put_get_roundtrip() {
         let dir = temp_dir("roundtrip");
         let mut store = FileStore::new(&dir);
 
-        // Duplicated (level, index) entries within a batch: last write wins,
-        // mirroring how the tree rewrites the right spine within a batch.
-        store
-            .put(&[
-                (0, 0, node(0x0a)),
-                (1, 0, node(0xff)),
-                (0, 1, node(0x0b)),
-                (1, 0, node(0x1a)),
-            ])
-            .unwrap();
+        store.put(0, 0, &[node(0x0a), node(0x0b)]).unwrap();
+        store.put(1, 0, &[node(0xff)]).unwrap();
+        // Rewriting inside the prefix, as the tree does to the right spine.
+        store.put(1, 0, &[node(0x1a)]).unwrap();
 
         assert_eq!(store.get_num_leaves(), 2);
         assert_eq!(
@@ -232,13 +182,12 @@ mod tests {
             vec![Some(node(0x0a)), Some(node(0x0b)), Some(node(0x1a))]
         );
 
-        // A later batch overwriting the spine tail (lo < count) keeps siblings.
-        store
-            .put(&[(0, 2, node(0x0c)), (1, 1, node(0x1b))])
-            .unwrap();
+        // A run that both rewrites the tail of the prefix and extends it.
+        store.put(1, 0, &[node(0x1c), node(0x1b)]).unwrap();
+        store.put(0, 2, &[node(0x0c)]).unwrap();
         assert_eq!(
             store.get(&[0, 1, 1], &[2, 0, 1]).unwrap(),
-            vec![Some(node(0x0c)), Some(node(0x1a)), Some(node(0x1b))]
+            vec![Some(node(0x0c)), Some(node(0x1c)), Some(node(0x1b))]
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -248,9 +197,8 @@ mod tests {
     fn out_of_range_reads_are_none() {
         let dir = temp_dir("out_of_range");
         let mut store = FileStore::new(&dir);
-        store
-            .put(&[(0, 0, node(0x0a)), (1, 0, node(0x1a))])
-            .unwrap();
+        store.put(0, 0, &[node(0x0a)]).unwrap();
+        store.put(1, 0, &[node(0x1a)]).unwrap();
 
         // Beyond the stored prefix of an existing level and beyond all levels.
         assert_eq!(
@@ -262,29 +210,32 @@ mod tests {
     }
 
     #[test]
-    fn non_contiguous_batches_are_rejected() {
+    fn runs_starting_past_the_prefix_are_rejected() {
         let dir = temp_dir("non_contiguous");
         let mut store = FileStore::new(&dir);
-        store.put(&[(0, 0, node(0x0a))]).unwrap();
+        store.put(0, 0, &[node(0x0a)]).unwrap();
 
-        // A hole inside the batch, even masked by a duplicate.
-        assert!(store
-            .put(&[(0, 1, node(0x0b)), (0, 3, node(0x0c))])
-            .is_err());
-        assert!(store
-            .put(&[(0, 1, node(0x0b)), (0, 1, node(0x0b)), (0, 3, node(0x0c))])
-            .is_err());
-        // A batch starting past the stored prefix.
-        assert!(store.put(&[(0, 5, node(0x0d))]).is_err());
-        // An absurd index range must error, not allocate by range size.
-        assert!(store
-            .put(&[(0, 1, node(0x0e)), (0, u64::MAX, node(0x0f))])
-            .is_err());
+        // A run starting past the stored prefix would leave a hole that reads
+        // back as though it held a node.
+        assert!(store.put(0, 2, &[node(0x0b)]).is_err());
+        assert!(store.put(0, u64::MAX, &[node(0x0c)]).is_err());
+        assert!(store.put(3, 1, &[node(0x0d)]).is_err());
 
         // The store stays usable and unchanged after rejections.
         assert_eq!(store.get_num_leaves(), 1);
-        store.put(&[(0, 1, node(0x0b))]).unwrap();
+        store.put(0, 1, &[node(0x0b)]).unwrap();
         assert_eq!(store.get_num_leaves(), 2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn empty_runs_are_accepted_and_change_nothing() {
+        let dir = temp_dir("empty");
+        let mut store = FileStore::new(&dir);
+        store.put(0, 0, &[]).unwrap();
+        store.put(9, 7, &[]).unwrap();
+        assert_eq!(store.get_num_leaves(), 0);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -294,18 +245,16 @@ mod tests {
         let dir = temp_dir("reopen");
         {
             let mut store = FileStore::new(&dir);
-            store
-                .put(&[(0, 0, node(0x0a)), (0, 1, node(0x0b)), (1, 0, node(0x1a))])
-                .unwrap();
+            store.put(0, 0, &[node(0x0a), node(0x0b)]).unwrap();
+            store.put(1, 0, &[node(0x1a)]).unwrap();
         }
 
         let mut store = FileStore::new(&dir);
         assert_eq!(store.get_num_leaves(), 2);
         assert_eq!(store.get(&[1], &[0]).unwrap(), vec![Some(node(0x1a))]);
 
-        store
-            .put(&[(0, 2, node(0x0c)), (1, 1, node(0x1b))])
-            .unwrap();
+        store.put(0, 2, &[node(0x0c)]).unwrap();
+        store.put(1, 1, &[node(0x1b)]).unwrap();
         assert_eq!(store.get_num_leaves(), 3);
         assert_eq!(
             store.get(&[0, 1], &[2, 1]).unwrap(),

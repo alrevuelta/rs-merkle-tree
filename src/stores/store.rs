@@ -16,9 +16,9 @@ pub trait Store {
     /// item means that the node is not present in the store.
     fn get(&self, levels: &[u32], indices: &[u64]) -> Result<Vec<Option<Node>>, MerkleError>;
 
-    /// Stores a list of nodes at the specified levels and indices. For example:
-    /// items=[(0, 10, SomeNode)] will store SomeNode at level 0 and index 10.
-    fn put(&mut self, items: &[(u32, u64, Node)]) -> Result<(), MerkleError>;
+    /// Stores `nodes` at `level`, the first at index `start` and the rest
+    /// following it, so one call describes one contiguous run.
+    fn put(&mut self, level: u32, start: u64, nodes: &[Node]) -> Result<(), MerkleError>;
 
     /// Returns the number of leaves in the store.
     fn get_num_leaves(&self) -> u64;

@@ -100,22 +100,28 @@ impl Store for SledStore {
         result
     }
 
-    fn put(&mut self, items: &[(u32, u64, Node)]) -> Result<(), MerkleError> {
-        let mut batch = Batch::default();
+    fn put(&mut self, level: u32, start: u64, nodes: &[Node]) -> Result<(), MerkleError> {
+        if nodes.is_empty() {
+            return Ok(());
+        }
 
-        for (level, index, node) in items.iter() {
-            let key = Self::encode_key(*level, *index);
+        // A key-value store gains nothing from the run being contiguous: it
+        // still needs one key per node.
+        let mut batch = Batch::default();
+        for (offset, node) in nodes.iter().enumerate() {
+            let key = Self::encode_key(level, start + offset as u64);
             batch.insert(&key, node.as_ref());
         }
 
-        let counter = items.iter().filter(|(level, _, _)| *level == 0).count();
-        batch.insert(
-            Self::KEY_NUM_LEAVES,
-            &(self.num_leaves + counter as u64).to_be_bytes(),
-        );
+        let num_leaves = if level == 0 {
+            self.num_leaves.max(start + nodes.len() as u64)
+        } else {
+            self.num_leaves
+        };
+        batch.insert(Self::KEY_NUM_LEAVES, &num_leaves.to_be_bytes());
 
         self.db.apply_batch(batch).map_err(Self::db_error)?;
-        self.num_leaves += counter as u64;
+        self.num_leaves = num_leaves;
 
         Ok(())
     }

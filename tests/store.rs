@@ -72,15 +72,17 @@ fn test_stores_single() {
     stores.push(Box::new(RocksDbStore::new(&path_rocksdb)));
 
     for mut store in stores {
-        store.put(&[(0, 0, Node::ZERO)]).unwrap();
-        store.put(&[(0, 1, Node::ZERO)]).unwrap();
-        store.put(&[(0, 2, Node::ZERO)]).unwrap();
+        store.put(0, 0, &[Node::ZERO]).unwrap();
+        store.put(0, 1, &[Node::ZERO]).unwrap();
+        store.put(0, 2, &[Node::ZERO]).unwrap();
         store
-            .put(&[(
+            .put(
                 0,
                 3,
-                to_node!("0x1230000000000000000000000000000000000000000000000000000000000000"),
-            )])
+                &[to_node!(
+                    "0x1230000000000000000000000000000000000000000000000000000000000000"
+                )],
+            )
             .unwrap();
 
         assert_eq!(store.get_num_leaves(), 4);
@@ -187,28 +189,13 @@ fn test_stores_multiple() {
         .map(|i| Node::from([(i + 1) * 0x11; Node::LEN]))
         .collect::<Vec<Node>>();
 
-    // Create a batch transaction adding al 8+4+2+1 = 15 nodes.
-    let mut batch: Vec<(u32, u64, Node)> = Vec::new();
-
-    for (index, i) in level_0.iter().enumerate() {
-        batch.push((0, index as u64, *i));
-    }
-
-    for (index, i) in level_1.iter().enumerate() {
-        batch.push((1, index as u64, *i));
-    }
-
-    for (index, i) in level_2.iter().enumerate() {
-        batch.push((2, index as u64, *i));
-    }
-
-    for (index, i) in level_3.iter().enumerate() {
-        batch.push((3, index as u64, *i));
-    }
+    // All 8+4+2+1 = 15 nodes, one run per level.
+    let runs = [&level_0, &level_1, &level_2, &level_3];
 
     for mut store in stores {
-        // Add the 15 nodes in a single batch transaction.
-        store.put(&batch).unwrap();
+        for (level, run) in runs.iter().enumerate() {
+            store.put(level as u32, 0, run).unwrap();
+        }
 
         assert_eq!(store.get_num_leaves(), 8);
 

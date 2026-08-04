@@ -143,27 +143,40 @@ And you can generate the following table with this.
 python benchmarks.py
 ```
 
-## Benchmarks
-
 ### `add_leaves` throughput
 
 | Depth | Hash | Leaves | Batch | Store | Throughput | p50 batch | p99 batch | Disk |
 |---|---|---|---|---|---|---|---|---|
-| 32 | keccak256 | 5000000 | 100000 | memory | 23.667 Melem/s | 3.961 ms | 8.534 ms | - |
-| 32 | keccak256 | 5000000 | 100000 | file | 19.883 Melem/s | 4.551 ms | 15.335 ms | 305.18 MiB |
-| 32 | keccak256 | 5000000 | 100000 | rocksdb | 4.489 Melem/s | 22.324 ms | 24.710 ms | 434.26 MiB |
-| 32 | keccak256 | 5000000 | 100000 | sqlite | 886.759 Kelem/s | 112.151 ms | 135.632 ms | 590.39 MiB |
-| 32 | keccak256 | 5000000 | 100000 | sled | 218.799 Kelem/s | 463.476 ms | 541.145 ms | 1.00 GiB |
+| 32 | keccak256 | 5000000 | 100000 | memory | 27.874 Melem/s | 3.578 ms | 4.866 ms | - |
+| 32 | keccak256 | 5000000 | 100000 | file | 25.317 Melem/s | 3.664 ms | 5.240 ms | 305.18 MiB |
+| 32 | keccak256 | 5000000 | 100000 | rocksdb | 4.379 Melem/s | 22.681 ms | 27.794 ms | 434.44 MiB |
+| 32 | keccak256 | 5000000 | 100000 | sqlite | 893.300 Kelem/s | 111.967 ms | 134.071 ms | 590.39 MiB |
+| 32 | keccak256 | 5000000 | 100000 | sled | 238.879 Kelem/s | 414.618 ms | 487.329 ms | 1.55 GiB |
+
+The stores run one after another in a single process, so by the time the flat
+file store runs the page cache is already under pressure from the memory store.
+Measured on its own it reaches 27.7 Melem/s, and repeated runs of the table above
+put it anywhere between 23.7 and 25.3.
+
+Throughput also depends strongly on how many leaves are handed over per call,
+because a call hashes each level once and writes each level once regardless of
+how much of the level it fills. On the flat file store, measured alone:
+
+| Batch | Throughput |
+|---|---|
+| 1000 | 2.85 Melem/s |
+| 10000 | 10.91 Melem/s |
+| 100000 | 27.67 Melem/s |
 
 ### `proof` time
 
 | Depth | Hash | Store | Time |
 |---|---|---|---|
-| 32 | keccak256 | memory | 191.740 ns |
-| 32 | keccak256 | file | 4.869 µs |
-| 32 | keccak256 | sled | 6.571 µs |
-| 32 | keccak256 | sqlite | 11.411 µs |
-| 32 | keccak256 | rocksdb | 12.693 µs |
+| 32 | keccak256 | memory | 199.360 ns |
+| 32 | keccak256 | file | 5.130 µs |
+| 32 | keccak256 | sled | 7.566 µs |
+| 32 | keccak256 | sqlite | 11.914 µs |
+| 32 | keccak256 | rocksdb | 14.988 µs |
 
 ## License
 

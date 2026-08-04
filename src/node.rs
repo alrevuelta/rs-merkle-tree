@@ -1,12 +1,31 @@
 use rand::RngCore;
 use std::fmt;
+use std::mem::size_of_val;
+use std::slice;
 
+/// `repr(transparent)` so that a run of nodes is byte for byte the run a store
+/// writes. See [`Node::as_bytes`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
 pub struct Node([u8; 32]);
 
 impl Node {
     pub const LEN: usize = 32;
     pub const ZERO: Node = Node([0; Node::LEN]);
+
+    /// Views a run of nodes as the bytes it is stored as.
+    ///
+    /// A store that keeps nodes contiguously, as the flat file store does, can
+    /// hand this straight to `write`. Serialising into an intermediate buffer
+    /// would copy the whole batch for nothing, and on the insertion path that
+    /// copy is a significant fraction of the work.
+    #[inline]
+    pub fn as_bytes(nodes: &[Node]) -> &[u8] {
+        // SAFETY: `Node` is `repr(transparent)` over `[u8; Node::LEN]`, so
+        // `nodes` is exactly `size_of_val(nodes)` initialised bytes of
+        // alignment 1, and the result borrows from `nodes`.
+        unsafe { slice::from_raw_parts(nodes.as_ptr().cast::<u8>(), size_of_val(nodes)) }
+    }
 }
 
 impl From<[u8; Node::LEN]> for Node {

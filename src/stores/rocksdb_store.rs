@@ -90,21 +90,27 @@ impl Store for RocksDbStore {
         result
     }
 
-    fn put(&mut self, items: &[(u32, u64, Node)]) -> Result<(), MerkleError> {
+    fn put(&mut self, level: u32, start: u64, nodes: &[Node]) -> Result<(), MerkleError> {
+        if nodes.is_empty() {
+            return Ok(());
+        }
+
         use rocksdb::WriteBatch;
         let mut batch = WriteBatch::default();
-
-        for (level, index, node) in items {
-            let key = Self::encode_key(*level, *index);
+        for (offset, node) in nodes.iter().enumerate() {
+            let key = Self::encode_key(level, start + offset as u64);
             batch.put(key, node.as_ref());
         }
 
-        let counter = items.iter().filter(|(level, _, _)| *level == 0).count() as u64;
-        let new_leaves = self.num_leaves + counter;
-        batch.put(Self::KEY_NUM_LEAVES, new_leaves.to_be_bytes().as_ref());
+        let num_leaves = if level == 0 {
+            self.num_leaves.max(start + nodes.len() as u64)
+        } else {
+            self.num_leaves
+        };
+        batch.put(Self::KEY_NUM_LEAVES, num_leaves.to_be_bytes().as_ref());
 
         self.db.write(batch).map_err(Self::db_error)?;
-        self.num_leaves = new_leaves;
+        self.num_leaves = num_leaves;
         Ok(())
     }
 
