@@ -44,8 +44,8 @@ pub struct Zeros<const DEPTH: usize> {
     last: Node,
 }
 
-/// Below this many hashes, Rayon scheduling costs more than serial hashing for
-/// inexpensive hashers such as Keccak-256.
+/// Below this many hashes, Rayon scheduling costs more than serial hashing.
+// TODO: This depends on the type of hashing algorithm and perhaps the hardware.
 const MIN_PARALLEL_HASHES: usize = 64;
 
 // TODO: Maybe use "typenum" crate to avoid this.
@@ -152,23 +152,30 @@ where
         self.store.put(0, start, &nodes)?;
 
         for (level, left_partner) in left_partners.iter().enumerate() {
-            let mut parents: Vec<Node> = Vec::with_capacity(nodes.len() / 2 + 1);
+            // The run pairs up as: an odd start pairs the stored left partner
+            // with the first node, an odd end pairs the last node with this
+            // level's zero, and everything between pairs consecutive nodes.
+            // Splitting the edges off up front leaves whole pairs, so they go
+            // to the hasher as runs rather than one by one.
+            let head = usize::from(start & 1 == 1);
+            let (pairs, tail) = nodes[head..].as_chunks::<2>();
 
-            let pairs = if start & 1 == 1 {
-                parents.push(self.hasher.hash(left_partner, &nodes[0]));
-                &nodes[1..]
-            } else {
-                &nodes[..]
-            };
+            let mut parents = vec![Node::ZERO; head + pairs.len() + tail.len()];
+            if head == 1 {
+                parents[0] = self.hasher.hash(left_partner, &nodes[0]);
+            }
+            if let [last] = tail {
+                parents[head + pairs.len()] = self.hasher.hash(last, &self.zeros[level]);
+            }
 
-            let hash_pair = |pair: &[Node]| {
-                let right = pair.get(1).unwrap_or(&self.zeros[level]);
-                self.hasher.hash(&pair[0], right)
-            };
-            if pairs.len() >= 2 * MIN_PARALLEL_HASHES {
-                parents.par_extend(pairs.par_chunks(2).map(hash_pair));
+            let body_out = &mut parents[head..head + pairs.len()];
+            if pairs.len() >= MIN_PARALLEL_HASHES {
+                pairs
+                    .par_chunks(MIN_PARALLEL_HASHES)
+                    .zip(body_out.par_chunks_mut(MIN_PARALLEL_HASHES))
+                    .for_each(|(pairs, out)| self.hasher.hash_pairs(pairs, out));
             } else {
-                parents.extend(pairs.chunks(2).map(hash_pair));
+                self.hasher.hash_pairs(pairs, body_out);
             }
 
             start >>= 1;
