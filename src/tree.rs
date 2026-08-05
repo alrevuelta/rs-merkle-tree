@@ -25,6 +25,9 @@ where
     hasher: H,
     store: S,
     zeros: Zeros<DEPTH>,
+    /// Left partners the next append needs, one per level, or `None` when they
+    /// have not been read from the store yet. See [`MerkleTree::frontier`].
+    frontier: Option<[Node; DEPTH]>,
 }
 
 // Type alias for common configuration
@@ -81,11 +84,57 @@ where
             front: zero,
             last: hasher.hash(&zero[DEPTH - 1], &zero[DEPTH - 1]),
         };
+        // An empty tree has no left partners, and a store that already holds a
+        // tree is read on the first append rather than here, so that opening
+        // one cannot fail.
+        let frontier = (store.get_num_leaves() == 0).then_some([Node::ZERO; DEPTH]);
+
         Self {
             hasher,
             store,
             zeros,
+            frontier,
         }
+    }
+
+    /// The left partners the next append needs, read from the store the first
+    /// time and maintained in memory from then on.
+    ///
+    /// `frontier[l]` is the node at level `l`, index `(num_leaves >> l) - 1`,
+    /// the one an append starting on an odd index at that level has to hash
+    /// against. Every leaf under it is already in the tree, so it is the root
+    /// of a full subtree and can never change again: holding on to it is not a
+    /// bet on the store staying untouched, it is a value that is already final.
+    /// Levels the tree has not reached hold no such node, and their entry is
+    /// never read, since an append there starts on an even index.
+    fn frontier(&self, num_leaves: u64) -> Result<[Node; DEPTH], MerkleError> {
+        if let Some(frontier) = self.frontier {
+            return Ok(frontier);
+        }
+
+        let mut levels = [0u32; DEPTH];
+        let mut indices = [0u64; DEPTH];
+        let mut len = 0usize;
+        for level in 0..DEPTH {
+            let start = num_leaves >> level;
+            if start > 0 {
+                levels[len] = level as u32;
+                indices[len] = start - 1;
+                len += 1;
+            }
+        }
+
+        // A partner left of a run start is always inside the stored prefix, so
+        // `None` cannot happen; treating it as zero keeps this consistent with
+        // how the tree reads every other absent node.
+        let mut frontier = [Node::ZERO; DEPTH];
+        let fetched = self.store.get(&levels[..len], &indices[..len])?;
+        for (&level, node) in levels[..len].iter().zip(fetched) {
+            let level = level as usize;
+            frontier[level] = node.unwrap_or(self.zeros[level]);
+        }
+
+        Ok(frontier)
     }
 
     /// Appends `leaves` to the tree and updates every ancestor they touch.
@@ -117,32 +166,12 @@ where
             });
         }
 
-        // The run at level `l` starts at `num_leaves >> l`, so which left
-        // partners are missing is known before hashing and they all fit in a
-        // single read.
-        let mut fetch_levels = [0u32; DEPTH];
-        let mut fetch_indices = [0u64; DEPTH];
-        let mut fetch_len = 0usize;
-        for level in 0..DEPTH {
-            let start = num_leaves >> level;
-            if start & 1 == 1 {
-                fetch_levels[fetch_len] = level as u32;
-                fetch_indices[fetch_len] = start - 1;
-                fetch_len += 1;
-            }
-        }
-
-        // A partner left of a run start is always inside the stored prefix, so
-        // `None` cannot happen; treating it as zero keeps this consistent with
-        // how the tree reads every other absent node.
-        let mut left_partners = [Node::ZERO; DEPTH];
-        let fetched = self
-            .store
-            .get(&fetch_levels[..fetch_len], &fetch_indices[..fetch_len])?;
-        for (&level, node) in fetch_levels[..fetch_len].iter().zip(fetched) {
-            let level = level as usize;
-            left_partners[level] = node.unwrap_or(self.zeros[level]);
-        }
+        // Cleared while the batch is in flight, so that an error below leaves
+        // it unset and the next call reads the store again rather than trusting
+        // partners that a half written batch may have invalidated.
+        let mut frontier = self.frontier(num_leaves)?;
+        self.frontier = None;
+        let end = num_leaves + leaves.len() as u64;
 
         // The nodes this call writes at level `l` are one contiguous run
         // starting at `num_leaves >> l`, so each level goes to the store whole,
@@ -151,11 +180,22 @@ where
         let mut nodes = leaves.to_vec();
         self.store.put(0, start, &nodes)?;
 
-        for (level, left_partner) in left_partners.iter().enumerate() {
+        for (level, partner) in frontier.iter_mut().enumerate() {
+            let left_partner = *partner;
+
+            // The partner the next call needs at this level is the node left of
+            // where that call starts. Either this run reaches it, and it is in
+            // hand, or the run stopped short of it and the one already held is
+            // still the node left of an unmoved start.
+            let next_start = end >> level;
+            if next_start > start {
+                *partner = nodes[(next_start - 1 - start) as usize];
+            }
+
             let mut parents: Vec<Node> = Vec::with_capacity(nodes.len() / 2 + 1);
 
             let pairs = if start & 1 == 1 {
-                parents.push(self.hasher.hash(left_partner, &nodes[0]));
+                parents.push(self.hasher.hash(&left_partner, &nodes[0]));
                 &nodes[1..]
             } else {
                 &nodes[..]
@@ -176,6 +216,7 @@ where
             self.store.put((level + 1) as u32, start, &nodes)?;
         }
 
+        self.frontier = Some(frontier);
         Ok(())
     }
 
@@ -486,6 +527,46 @@ mod tests {
                     tree.verify_proof(&proof).unwrap(),
                     "batch size {size}, leaf {i}"
                 );
+            }
+        }
+    }
+
+    /// The cached partners are the tree's only state that the store does not
+    /// hold, so what they must satisfy is that reading them back gives the same
+    /// answer. Checked at every prefix, since a level only moves once every
+    /// `2^level` leaves and a stale entry would otherwise sit unnoticed.
+    #[cfg(feature = "memory_store")]
+    #[test]
+    fn test_cached_partners_match_the_store() {
+        const DEPTH: usize = 8;
+        let leaves: Vec<Node> = (1..=1 << DEPTH)
+            .map(|i| to_node!(format!("0x{:064x}", i).as_str()))
+            .collect();
+
+        for size in [1, 2, 3, 5, 7, 8, 16, 33] {
+            let mut tree = MerkleTree::<Keccak256Hasher, MemoryStore, DEPTH>::new(
+                Keccak256Hasher,
+                MemoryStore::default(),
+            );
+
+            for batch in leaves.chunks(size) {
+                tree.add_leaves(batch).unwrap();
+
+                let cached = tree.frontier.take().expect("cached by a successful append");
+                let num_leaves = tree.num_leaves();
+                let stored = tree.frontier(num_leaves).unwrap();
+
+                for level in 0..DEPTH {
+                    // Levels the tree has not reached hold no partner, and an
+                    // append there starts on an even index and never reads one.
+                    if num_leaves >> level > 0 {
+                        assert_eq!(
+                            cached[level], stored[level],
+                            "batch size {size}, {num_leaves} leaves, level {level}"
+                        );
+                    }
+                }
+                tree.frontier = Some(cached);
             }
         }
     }
