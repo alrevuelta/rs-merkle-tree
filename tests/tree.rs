@@ -125,6 +125,44 @@ fn test_merkle_tree_keccak_32_file() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Reopening is the only path that has to recover the left partners from the
+/// store instead of from nodes the process just wrote, and which partners are
+/// needed depends on the leaf count, so every prefix is a different case.
+#[cfg(all(feature = "file_store", feature = "memory_store"))]
+#[test]
+fn test_reopen_at_every_prefix() {
+    const DEPTH: usize = 8;
+    const LEAVES: usize = 1 << DEPTH;
+
+    let leaves = (1..=LEAVES)
+        .map(|i| to_node!(format!("0x{:064x}", i).as_str()))
+        .collect::<Vec<Node>>();
+
+    let mut expected: MerkleTree<Keccak256Hasher, MemoryStore, DEPTH> =
+        MerkleTree::new(Keccak256Hasher, MemoryStore::default());
+    expected.add_leaves(&leaves).unwrap();
+    let expected = expected.root().unwrap();
+
+    let dir = std::env::temp_dir().join(format!("rs-merkle-tree-reopen-{}", std::process::id()));
+    for split in 1..LEAVES {
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.to_str().expect("utf-8 temp path").to_owned();
+
+        let mut tree: MerkleTree<Keccak256Hasher, FileStore, DEPTH> =
+            MerkleTree::new(Keccak256Hasher, FileStore::new(&path));
+        tree.add_leaves(&leaves[..split]).unwrap();
+        drop(tree);
+
+        let mut tree: MerkleTree<Keccak256Hasher, FileStore, DEPTH> =
+            MerkleTree::new(Keccak256Hasher, FileStore::new(&path));
+        tree.add_leaves(&leaves[split..]).unwrap();
+
+        assert_eq!(tree.num_leaves(), LEAVES as u64, "reopened at {split}");
+        assert_eq!(tree.root().unwrap(), expected, "reopened at {split}");
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 #[cfg(any(
     feature = "sled_store",
     feature = "sqlite_store",
