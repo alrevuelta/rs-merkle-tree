@@ -283,6 +283,15 @@ where
         })
     }
 
+    /// # Arguments
+    ///
+    /// * `given_leaf` — The leaf to search for.
+    /// * `lower_bound_idx` — The starting index of the search.
+    /// * `upper_bound_limit` — The number of nodes to search after `lower_bound_idx`.
+    ///
+    /// # Returns
+    ///
+    /// `MerkleProof` for the given leaf.
     pub fn proof_by_leaf(
         &self,
         given_leaf: Node,
