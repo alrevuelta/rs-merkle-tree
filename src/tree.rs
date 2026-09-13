@@ -283,6 +283,47 @@ where
         })
     }
 
+    /// # Arguments
+    ///
+    /// * `given_leaf` — The leaf to search for.
+    /// * `lower_bound_idx` — The starting index of the search.
+    /// * `upper_bound_limit` — The number of nodes to search after `lower_bound_idx`.
+    ///
+    /// # Returns
+    ///
+    /// `MerkleProof` for the given leaf.
+    pub fn proof_by_leaf(
+        &self,
+        given_leaf: Node,
+        lower_bound_idx: u64,
+        upper_bound_limit: u64,
+    ) -> Result<MerkleProof<DEPTH>, MerkleError> {
+        let max_leaves = 1u64 << DEPTH;
+        if lower_bound_idx >= max_leaves {
+            return Err(MerkleError::LeafIndexOutOfBounds {
+                index: lower_bound_idx,
+                num_leaves: max_leaves,
+            });
+        }
+
+        let num_leaves = self.num_leaves();
+        let end_idx = num_leaves.min(lower_bound_idx.saturating_add(upper_bound_limit));
+        let num_to_fetch = end_idx.saturating_sub(lower_bound_idx);
+
+        let levels: Vec<u32> = vec![0; num_to_fetch as usize];
+        let indices: Vec<u64> = (lower_bound_idx..end_idx).collect();
+
+        let leaves = self.store.get(&levels, &indices)?;
+
+        let found_idx = leaves
+            .iter()
+            .position(|leaf| *leaf == Some(given_leaf))
+            .map(|offset| lower_bound_idx + offset as u64)
+            .ok_or(MerkleError::LeafNotFound)?;
+
+        self.proof(found_idx)
+    }
+
     pub fn verify_proof(&self, proof: &MerkleProof<DEPTH>) -> Result<bool, MerkleError> {
         let mut computed_hash = proof.leaf;
         for (j, sibling_hash) in proof.proof.iter().enumerate() {
@@ -537,5 +578,27 @@ mod tests {
 
         // It errors since the tree is full
         assert!(tree.add_leaves(&[Node::ZERO]).is_err());
+    }
+
+    #[cfg(feature = "memory_store")]
+    #[test]
+    fn test_proof_by_commitment() {
+        let hasher = Keccak256Hasher;
+        let store = MemoryStore::default();
+        let mut tree = MerkleTree::<Keccak256Hasher, MemoryStore, 26>::new(hasher, store);
+
+        tree.add_leaves(&(0..8).map(|_| Node::random()).collect::<Vec<Node>>())
+            .unwrap();
+
+        let proof_by_index = tree.proof(5).unwrap();
+
+        let required_leaf = proof_by_index.leaf;
+
+        let proof_by_commitment = tree.proof_by_leaf(required_leaf, 0, 8).unwrap();
+
+        assert_eq!(proof_by_index.leaf, proof_by_commitment.leaf);
+        assert_eq!(proof_by_index.root, proof_by_commitment.root);
+        assert_eq!(proof_by_index.proof, proof_by_commitment.proof);
+        assert_eq!(proof_by_index.index, proof_by_commitment.index);
     }
 }
