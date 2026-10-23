@@ -225,21 +225,12 @@ where
     }
 
     pub fn proof(&self, leaf_idx: u64) -> Result<MerkleProof<DEPTH>, MerkleError> {
-        // Implementation detail. Allow proofs even beyond the number of leaves.
-        // Since it has fixed depth it is technically correct.
-        // Error if leaf_idx is out of bounds.
-        // if leaf_idx >= self.store.get_num_leaves() {
-        //    return Err(MerkleError::LeafIndexOutOfBounds {
-        //        index: leaf_idx,
-        //        num_leaves: self.store.get_num_leaves(),
-        //    }
-        //    .into());
-        //}
-
-        if leaf_idx > 1 << DEPTH as u64 {
+        // Allow proofs for unfilled positions within the tree's capacity.
+        let capacity = 1 << DEPTH as u64;
+        if leaf_idx >= capacity {
             return Err(MerkleError::LeafIndexOutOfBounds {
                 index: leaf_idx,
-                num_leaves: 1 << DEPTH as u64,
+                num_leaves: capacity,
             });
         }
 
@@ -537,5 +528,25 @@ mod tests {
 
         // It errors since the tree is full
         assert!(tree.add_leaves(&[Node::ZERO]).is_err());
+    }
+
+    #[cfg(feature = "memory_store")]
+    #[test]
+    fn test_proof_rejects_first_index_past_capacity() {
+        let mut tree = MerkleTree::<Keccak256Hasher, MemoryStore, 3>::new(
+            Keccak256Hasher,
+            MemoryStore::default(),
+        );
+        tree.add_leaves(&[Node::from([1; Node::LEN])]).unwrap();
+
+        let last_in_bounds_proof = tree.proof(7).unwrap();
+        assert!(tree.verify_proof(&last_in_bounds_proof).unwrap());
+        assert!(matches!(
+            tree.proof(8),
+            Err(MerkleError::LeafIndexOutOfBounds {
+                index: 8,
+                num_leaves: 8
+            })
+        ));
     }
 }
